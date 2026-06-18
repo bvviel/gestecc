@@ -22,6 +22,7 @@ export async function POST(request: Request) {
         discipline: String(body.discipline ?? ""),
         email: String(body.email ?? ""),
         password: String(body.password ?? ""),
+        contractType: String(body.contractType ?? ""),
       });
       return NextResponse.json({
         ok: true,

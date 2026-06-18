@@ -3,6 +3,7 @@ import { getSupabaseAdmin, isSupabaseConfigured } from "./supabase-server";
 import { hashPassword, signSession, verifyPassword } from "./security";
 import type {
   AppSnapshot,
+  ContractType,
   Notification,
   Reservation,
   Room,
@@ -32,6 +33,16 @@ function today() {
   return new Date().toISOString().slice(0, 10);
 }
 
+function weekdaysLabel(weekday: number) {
+  return ["Domingo", "segunda-feira", "terça-feira", "quarta-feira", "quinta-feira", "sexta-feira", "sábado"][weekday] ?? "dia útil";
+}
+
+function addYears(date: string, years: number) {
+  const value = new Date(`${date}T00:00:00`);
+  value.setFullYear(value.getFullYear() + years);
+  return value.toISOString().slice(0, 10);
+}
+
 function newId(prefix: string) {
   return `${prefix}-${crypto.randomUUID()}`;
 }
@@ -56,6 +67,10 @@ function normalizeEmail(email: string) {
   return email.trim().toLowerCase();
 }
 
+function normalizeContractType(value: string): ContractType {
+  return value === "permanent" ? "permanent" : "temporary";
+}
+
 function getManagerCredentials() {
   return {
     username: process.env.GESTECC_MANAGER_USERNAME,
@@ -77,6 +92,7 @@ function mapTeacher(row: Record<string, unknown>): Teacher {
     fullName: String(row.full_name),
     discipline: String(row.discipline ?? ""),
     email: String(row.email),
+    contractType: normalizeContractType(String(row.contract_type ?? (row.contract_end ? "temporary" : "permanent"))),
     contractStart: String(row.contract_start),
     contractEnd: row.contract_end ? String(row.contract_end) : null,
     contractStatus: String(row.contract_status ?? "active") as Teacher["contractStatus"],
@@ -91,6 +107,7 @@ function mapRequest(row: Record<string, unknown>): TeacherRequest {
     fullName: String(row.full_name),
     discipline: String(row.discipline),
     email: String(row.email),
+    contractType: normalizeContractType(String(row.contract_type ?? "temporary")),
     status: String(row.status) as TeacherRequest["status"],
     rejectionReason: row.rejection_reason ? String(row.rejection_reason) : null,
     createdAt: String(row.created_at),
@@ -464,6 +481,7 @@ export async function createTeacherRequest(payload: ActionPayload) {
   const discipline = String(payload.discipline ?? "").trim();
   const email = normalizeEmail(String(payload.email ?? ""));
   const password = String(payload.password ?? "");
+  const contractType = normalizeContractType(String(payload.contractType ?? "temporary"));
 
   if (!fullName || !discipline || !email || password.length < 6) {
     rowError("Preencha todos os dados obrigatórios para solicitar cadastro.");
@@ -485,6 +503,7 @@ export async function createTeacherRequest(payload: ActionPayload) {
       fullName,
       discipline,
       email,
+      contractType,
       status: "pending",
       rejectionReason: null,
       createdAt: nowIso(),
@@ -533,6 +552,7 @@ export async function createTeacherRequest(payload: ActionPayload) {
       discipline,
       email,
       password_hash: passwordHash,
+      contract_type: contractType,
       status: "pending",
     })
     .select("*")
@@ -564,14 +584,16 @@ async function approveRequest(claims: SessionClaims, requestId: string) {
 
     request.status = "approved";
     request.reviewedAt = nowIso();
+    const contractStart = today();
 
     const teacher: Teacher = {
       id: newId("teacher"),
       fullName: request.fullName,
       discipline: request.discipline,
       email: request.email,
-      contractStart: today(),
-      contractEnd: null,
+      contractType: request.contractType,
+      contractStart,
+      contractEnd: request.contractType === "temporary" ? addYears(contractStart, 2) : null,
       contractStatus: "active",
       avatarUrl: null,
       createdAt: nowIso(),
@@ -614,7 +636,11 @@ async function approveRequest(claims: SessionClaims, requestId: string) {
       discipline: requestData.discipline,
       email: requestData.email,
       password_hash: requestData.password_hash,
+      contract_type: requestData.contract_type,
       contract_start: today(),
+      contract_end: normalizeContractType(String(requestData.contract_type ?? "temporary")) === "temporary"
+        ? addYears(today(), 2)
+        : null,
       contract_status: "active",
     })
     .select("*")
@@ -693,6 +719,70 @@ async function lookupRoom(roomId: string) {
   const { data, error } = await supabase.from("rooms").select("*").eq("id", roomId).single();
   if (error) rowError(error.message);
   return mapRoom(data as Record<string, unknown>);
+}
+
+function findMemorySchedule(state: MemoryState, scheduleId: string) {
+  return state.schedules.find((item) => item.id === scheduleId) ?? rowError("Aula não encontrada.");
+}
+
+async function lookupSchedule(scheduleId: string) {
+  if (!isSupabaseConfigured()) return findMemorySchedule(memory(), scheduleId);
+  const supabase = getSupabaseAdmin();
+  if (!supabase) rowError("Supabase não configurado.");
+  const { data, error } = await supabase.from("schedules").select("*").eq("id", scheduleId).single();
+  if (error) rowError(error.message);
+  return mapSchedule(data as Record<string, unknown>);
+}
+
+function validateSchedulePayload(payload: ActionPayload, fallbackDiscipline: string) {
+  const classGroup = String(payload.classGroup ?? "").trim();
+  const periodLabel = String(payload.periodLabel ?? "").trim();
+  const discipline = String(payload.discipline ?? fallbackDiscipline).trim();
+  const startTime = String(payload.startTime ?? "");
+  const endTime = String(payload.endTime ?? "");
+  const weekday = Number(payload.weekday ?? 1);
+
+  if (!classGroup || !periodLabel || !discipline || !startTime || !endTime) {
+    rowError("Preencha todos os dados do horário.");
+  }
+  if (weekday < 1 || weekday > 5) rowError("Selecione um dia útil para a aula.");
+
+  return { classGroup, periodLabel, discipline, startTime, endTime, weekday };
+}
+
+async function addTeacherNotification(
+  teacherId: string,
+  title: string,
+  body: string,
+  kind: string,
+  payload: Record<string, unknown> | null = null,
+) {
+  if (!isSupabaseConfigured()) {
+    memory().notifications.unshift({
+      id: newId("notification"),
+      targetRole: "teacher",
+      teacherId,
+      title,
+      body,
+      kind,
+      readAt: null,
+      payload,
+      createdAt: nowIso(),
+    });
+    return;
+  }
+
+  const supabase = getSupabaseAdmin();
+  if (!supabase) rowError("Supabase não configurado.");
+  const { error } = await supabase.from("notifications").insert({
+    target_role: "teacher",
+    teacher_id: teacherId,
+    title,
+    body,
+    kind,
+    payload,
+  });
+  if (error) rowError(error.message);
 }
 
 export async function performAction(
@@ -806,21 +896,17 @@ export async function performAction(
     requireManager(claims);
     const teacher = await lookupTeacher(String(payload.teacherId ?? ""));
     const room = await lookupRoom(String(payload.roomId ?? ""));
-    const classGroup = String(payload.classGroup ?? "").trim();
-    const periodLabel = String(payload.periodLabel ?? "").trim();
-    const discipline = String(payload.discipline ?? teacher.discipline).trim();
-    const startTime = String(payload.startTime ?? "");
-    const endTime = String(payload.endTime ?? "");
-    const weekday = Number(payload.weekday ?? 1);
-    if (!classGroup || !periodLabel || !discipline || !startTime || !endTime) {
-      rowError("Preencha todos os dados do horário.");
-    }
+    const { classGroup, periodLabel, discipline, startTime, endTime, weekday } = validateSchedulePayload(
+      payload,
+      teacher.discipline,
+    );
     if (teacher.discipline !== discipline) {
       rowError(`Selecione um professor aprovado para ${discipline}.`);
     }
 
+    let scheduleId: string | null = null;
     if (!isSupabaseConfigured()) {
-      memory().schedules.push({
+      const schedule: Schedule = {
         id: newId("schedule"),
         teacherId: teacher.id,
         teacherName: teacher.fullName,
@@ -832,22 +918,144 @@ export async function performAction(
         periodLabel,
         startTime,
         endTime,
-      });
+      };
+      scheduleId = schedule.id;
+      memory().schedules.push(schedule);
     } else {
       const supabase = getSupabaseAdmin();
       if (!supabase) rowError("Supabase não configurado.");
-      const { error } = await supabase.from("schedules").insert({
-        teacher_id: teacher.id,
-        teacher_name: teacher.fullName,
-        discipline,
-        class_group: classGroup,
-        room_id: room.id,
-        room_name: room.name,
-        weekday,
-        period_label: periodLabel,
-        start_time: startTime,
-        end_time: endTime,
-      });
+      const { data, error } = await supabase
+        .from("schedules")
+        .insert({
+          teacher_id: teacher.id,
+          teacher_name: teacher.fullName,
+          discipline,
+          class_group: classGroup,
+          room_id: room.id,
+          room_name: room.name,
+          weekday,
+          period_label: periodLabel,
+          start_time: startTime,
+          end_time: endTime,
+        })
+        .select("id")
+        .single();
+      if (error) rowError(error.message);
+      scheduleId = String((data as Record<string, unknown>).id);
+    }
+    await addTeacherNotification(
+      teacher.id,
+      "Nova aula cadastrada",
+      `${discipline} em ${classGroup}, ${weekdaysLabel(weekday)}, ${periodLabel}, sala ${room.name}.`,
+      "schedule_created",
+      { scheduleId },
+    );
+    return getSnapshot(claims);
+  }
+
+  if (action === "updateSchedule") {
+    requireManager(claims);
+    const scheduleId = String(payload.scheduleId ?? "");
+    const current = await lookupSchedule(scheduleId);
+    const teacher = await lookupTeacher(String(payload.teacherId ?? current.teacherId));
+    const room = await lookupRoom(String(payload.roomId ?? current.roomId ?? ""));
+    const { classGroup, periodLabel, discipline, startTime, endTime, weekday } = validateSchedulePayload(
+      payload,
+      teacher.discipline,
+    );
+    if (teacher.discipline !== discipline) {
+      rowError(`Selecione um professor aprovado para ${discipline}.`);
+    }
+
+    if (!isSupabaseConfigured()) {
+      const target = findMemorySchedule(memory(), scheduleId);
+      target.teacherId = teacher.id;
+      target.teacherName = teacher.fullName;
+      target.discipline = discipline;
+      target.classGroup = classGroup;
+      target.roomId = room.id;
+      target.roomName = room.name;
+      target.weekday = weekday;
+      target.periodLabel = periodLabel;
+      target.startTime = startTime;
+      target.endTime = endTime;
+    } else {
+      const supabase = getSupabaseAdmin();
+      if (!supabase) rowError("Supabase não configurado.");
+      const { error } = await supabase
+        .from("schedules")
+        .update({
+          teacher_id: teacher.id,
+          teacher_name: teacher.fullName,
+          discipline,
+          class_group: classGroup,
+          room_id: room.id,
+          room_name: room.name,
+          weekday,
+          period_label: periodLabel,
+          start_time: startTime,
+          end_time: endTime,
+        })
+        .eq("id", scheduleId);
+      if (error) rowError(error.message);
+    }
+
+    await addTeacherNotification(
+      teacher.id,
+      "Aula atualizada",
+      `${discipline} em ${classGroup}, ${weekdaysLabel(weekday)}, ${periodLabel}, sala ${room.name}.`,
+      "schedule_updated",
+      { scheduleId },
+    );
+    return getSnapshot(claims);
+  }
+
+  if (action === "deleteSchedule") {
+    requireManager(claims);
+    const scheduleId = String(payload.scheduleId ?? "");
+    const schedule = await lookupSchedule(scheduleId);
+
+    if (!isSupabaseConfigured()) {
+      const state = memory();
+      state.schedules = state.schedules.filter((item) => item.id !== scheduleId);
+    } else {
+      const supabase = getSupabaseAdmin();
+      if (!supabase) rowError("Supabase não configurado.");
+      const { error } = await supabase.from("schedules").delete().eq("id", scheduleId);
+      if (error) rowError(error.message);
+    }
+
+    await addTeacherNotification(
+      schedule.teacherId,
+      "Aula removida",
+      `${schedule.discipline} em ${schedule.classGroup}, ${weekdaysLabel(schedule.weekday)}, ${schedule.periodLabel}, sala ${schedule.roomName}.`,
+      "schedule_deleted",
+      { scheduleId },
+    );
+    return getSnapshot(claims);
+  }
+
+  if (action === "markNotificationRead") {
+    const notificationId = String(payload.notificationId ?? "");
+    if (!notificationId) rowError("Notificação não encontrada.");
+
+    if (!isSupabaseConfigured()) {
+      const notification = memory().notifications.find((item) => item.id === notificationId);
+      if (!notification) rowError("Notificação não encontrada.");
+      const canRead =
+        claims.role === "manager"
+          ? notification.targetRole === "manager"
+          : notification.teacherId === claims.teacherId;
+      if (!canRead) rowError("Notificação não encontrada.");
+      notification.readAt = notification.readAt ?? nowIso();
+    } else {
+      const supabase = getSupabaseAdmin();
+      if (!supabase) rowError("Supabase não configurado.");
+      let query = supabase.from("notifications").update({ read_at: nowIso() }).eq("id", notificationId);
+      query = claims.role === "manager"
+        ? query.eq("target_role", "manager")
+        : query.eq("teacher_id", claims.teacherId ?? "");
+      const { error } = await query;
       if (error) rowError(error.message);
     }
     return getSnapshot(claims);

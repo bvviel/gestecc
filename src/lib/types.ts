@@ -19,6 +19,7 @@ export type Role = "manager" | "teacher";
 export type RequestStatus = "pending" | "approved" | "rejected";
 export type RoomStatus = "free" | "occupied" | "reserved";
 export type ReservationStatus = "pending" | "approved" | "rejected";
+export type ContractType = "permanent" | "temporary";
 
 export type SessionClaims = {
   role: Role;
@@ -37,6 +38,7 @@ export type Teacher = {
   fullName: string;
   discipline: string;
   email: string;
+  contractType: ContractType;
   contractStart: string;
   contractEnd: string | null;
   contractStatus: "active" | "ending" | "ended";
@@ -49,6 +51,7 @@ export type TeacherRequest = {
   fullName: string;
   discipline: string;
   email: string;
+  contractType: ContractType;
   status: RequestStatus;
   rejectionReason: string | null;
   createdAt: string;

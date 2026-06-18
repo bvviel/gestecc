@@ -4,7 +4,6 @@ import {
   Bell,
   BookOpen,
   Calendar,
-  Check,
   ChevronLeft,
   ClipboardList,
   Clock,
@@ -15,6 +14,7 @@ import {
   LayoutDashboard,
   LogOut,
   Moon,
+  Pencil,
   Plus,
   Shield,
   Sun,
@@ -25,11 +25,11 @@ import {
   X,
 } from "lucide-react";
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { DISCIPLINES, type AppSnapshot, type ClientSession, type Room } from "@/lib/types";
+import { DISCIPLINES, type AppSnapshot, type ClientSession, type Room, type Schedule } from "@/lib/types";
 
 type AuthView = "select" | "manager" | "teacher" | "request";
 type PageView = "general" | "manager" | "teacher";
-type ManagerTab = "people" | "contracts" | "schedules" | "rooms" | "notices";
+type ManagerTab = "people" | "contracts" | "schedules" | "notices";
 type TeacherTab = "overview" | "schedules" | "reservations" | "profile";
 type ApiResponse<T> = { ok: true; data: T } | { ok: false; message: string };
 
@@ -42,6 +42,17 @@ const workWeek = [
   { value: 4, label: "Quinta" },
   { value: 5, label: "Sexta" },
 ];
+const periodOptions = [
+  { label: "1º período", start: "07:00", end: "07:50" },
+  { label: "2º período", start: "07:50", end: "08:40" },
+  { label: "3º período", start: "08:40", end: "09:30" },
+  { label: "4º período", start: "09:50", end: "10:40" },
+  { label: "5º período", start: "10:40", end: "11:30" },
+  { label: "6º período", start: "11:30", end: "12:20" },
+].map((period) => ({
+  ...period,
+  value: `${period.label}|${period.start}|${period.end}`,
+}));
 
 const emptyData: AppSnapshot = {
   configured: false,
@@ -106,6 +117,19 @@ function roomStatusClass(status: Room["status"]) {
   if (status === "occupied") return "border-rose-200 bg-rose-50 text-rose-700 dark:border-rose-900/70 dark:bg-rose-950/35 dark:text-rose-200";
   if (status === "reserved") return "border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-900/70 dark:bg-amber-950/35 dark:text-amber-200";
   return "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900/70 dark:bg-emerald-950/35 dark:text-emerald-200";
+}
+
+function contractTypeLabel(value: "permanent" | "temporary") {
+  return value === "permanent" ? "Concursado" : "Não concursado";
+}
+
+function periodValue(schedule: Pick<Schedule, "periodLabel" | "startTime" | "endTime">) {
+  return `${schedule.periodLabel}|${schedule.startTime}|${schedule.endTime}`;
+}
+
+function periodFromValue(value: string) {
+  const [label = periodOptions[0].label, start = periodOptions[0].start, end = periodOptions[0].end] = value.split("|");
+  return { label, start, end };
 }
 
 function getFormString(form: HTMLFormElement, name: string) {
@@ -432,6 +456,7 @@ export function GesteccApp() {
           mode: "requestAccess",
           fullName: getFormString(form, "fullName"),
           discipline: getFormString(form, "discipline"),
+          contractType: getFormString(form, "contractType"),
           email: getFormString(form, "email"),
           password,
         }),
@@ -457,13 +482,16 @@ export function GesteccApp() {
   const metrics = useMemo(() => {
     const occupied = data.rooms.filter((room) => room.status !== "free").length;
     const free = data.rooms.length - occupied;
+    const todaysSchedules = data.schedules.filter((schedule) => schedule.weekday === new Date().getDay()).length;
     return {
       occupied,
       free,
+      todaysSchedules,
       substitutions: data.substitutions.length,
       notices: data.notices.length,
       activeTeachers: data.teachers.length,
       pendingRequests: data.requests.filter((request) => request.status === "pending").length,
+      reservations: data.reservations.length,
     };
   }, [data]);
 
@@ -474,6 +502,7 @@ export function GesteccApp() {
 
   const freeRooms = data.rooms.filter((room) => room.status === "free");
   const occupiedByMe = data.rooms.find((room) => room.currentTeacherId === session?.teacherId);
+  const unreadNotifications = data.notifications.filter((notification) => !notification.readAt).length;
 
   if (!session) {
     return (
@@ -642,6 +671,13 @@ export function GesteccApp() {
                       <option key={discipline}>{discipline}</option>
                     ))}
                   </SelectInput>
+                  <SelectInput label="Tipo de vínculo" name="contractType" defaultValue="" required>
+                    <option value="" disabled>
+                      Selecione o vínculo
+                    </option>
+                    <option value="permanent">Concursado</option>
+                    <option value="temporary">Não concursado</option>
+                  </SelectInput>
                   <TextInput label="E-mail institucional" name="email" type="email" placeholder="seu@escola.edu.br" required />
                   <PasswordInput label="Senha" name="password" placeholder="Mínimo 6 caracteres" />
                   <PasswordInput label="Confirmar senha" name="confirmPassword" placeholder="Repita a senha" />
@@ -737,8 +773,10 @@ export function GesteccApp() {
                 aria-label="Notificações"
               >
                 <Bell size={18} />
-                {data.notifications.length > 0 && (
-                  <span className="absolute right-2 top-2 h-2.5 w-2.5 rounded-full bg-[#e95635] ring-2 ring-white dark:ring-[#0c0714]" />
+                {unreadNotifications > 0 && (
+                  <span className="absolute right-1 top-1 grid h-5 min-w-5 place-items-center rounded-full bg-[#e95635] px-1 text-[10px] font-black text-white ring-2 ring-white dark:ring-[#0c0714]">
+                    {unreadNotifications}
+                  </span>
                 )}
               </button>
               {notificationsOpen && (
@@ -753,22 +791,56 @@ export function GesteccApp() {
                     {data.notifications.map((notification) => {
                       const requestId = String(notification.payload?.requestId ?? "");
                       return (
-                        <div key={notification.id} className="rounded-lg p-3 hover:bg-zinc-50 dark:hover:bg-white/5">
-                          <div className="text-sm font-black">{notification.title}</div>
+                        <div
+                          key={notification.id}
+                          className={cx(
+                            "cursor-pointer rounded-lg border p-3 transition hover:bg-zinc-50 dark:hover:bg-white/5",
+                            notification.readAt
+                              ? "border-transparent opacity-75"
+                              : "border-orange-100 bg-orange-50/60 dark:border-orange-900/40 dark:bg-orange-950/20",
+                          )}
+                          onClick={() => {
+                            if (!notification.readAt) {
+                              void postAction("markNotificationRead", { notificationId: notification.id });
+                            }
+                          }}
+                        >
+                          <div className="flex items-center justify-between gap-3">
+                            <div className="text-sm font-black">{notification.title}</div>
+                            {!notification.readAt && <span className="h-2 w-2 rounded-full bg-[#e95635]" />}
+                          </div>
                           <div className="mt-1 text-xs leading-5 text-zinc-500 dark:text-zinc-400">{notification.body}</div>
-                          <div className="mt-2 text-[11px] text-zinc-400">{dateTimeLabel(notification.createdAt)}</div>
+                          <div className="mt-2 text-[11px] text-zinc-400">
+                            {dateTimeLabel(notification.createdAt)} · {notification.readAt ? "Lida" : "Não lida"}
+                          </div>
                           {session.role === "manager" && requestId && (
                             <div className="mt-3 flex gap-2">
                               <Button
                                 className="h-8 px-3 text-xs"
-                                onClick={() => void postAction("approveRequest", { requestId })}
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  void (async () => {
+                                    if (!notification.readAt) {
+                                      await postAction("markNotificationRead", { notificationId: notification.id });
+                                    }
+                                    await postAction("approveRequest", { requestId });
+                                  })();
+                                }}
                               >
                                 Aprovar
                               </Button>
                               <Button
                                 variant="secondary"
                                 className="h-8 px-3 text-xs"
-                                onClick={() => void postAction("rejectRequest", { requestId })}
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  void (async () => {
+                                    if (!notification.readAt) {
+                                      await postAction("markNotificationRead", { notificationId: notification.id });
+                                    }
+                                    await postAction("rejectRequest", { requestId });
+                                  })();
+                                }}
                               >
                                 Recusar
                               </Button>
@@ -811,7 +883,7 @@ export function GesteccApp() {
         )}
 
         {page === "general" && (
-          <GeneralDashboard data={data} metrics={metrics} />
+          <GeneralDashboard data={data} metrics={metrics} role={session.role} />
         )}
 
         {page === "manager" && session.role === "manager" && (
@@ -821,8 +893,8 @@ export function GesteccApp() {
               <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">{fullDateLabel()}</p>
             </div>
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-              <StatCard icon={<DoorOpen size={17} />} label="Salas ocupadas" value={metrics.occupied} tone="bg-rose-50 text-rose-600 dark:bg-rose-500/10" />
-              <StatCard icon={<Check size={17} />} label="Salas livres" value={metrics.free} tone="bg-emerald-50 text-emerald-600 dark:bg-emerald-500/10" />
+              <StatCard icon={<Users size={17} />} label="Professores ativos" value={metrics.activeTeachers} tone="bg-emerald-50 text-emerald-600 dark:bg-emerald-500/10" />
+              <StatCard icon={<Shield size={17} />} label="Solicitações pendentes" value={metrics.pendingRequests} tone="bg-rose-50 text-rose-600 dark:bg-rose-500/10" />
               <StatCard icon={<ClipboardList size={17} />} label="Substituições hoje" value={metrics.substitutions} tone="bg-amber-50 text-amber-600 dark:bg-amber-500/10" />
               <StatCard icon={<Bell size={17} />} label="Avisos ativos" value={metrics.notices} tone="bg-blue-50 text-blue-600 dark:bg-blue-500/10" />
             </div>
@@ -832,7 +904,6 @@ export function GesteccApp() {
                 ["people", "Pessoas", Users],
                 ["contracts", "Contratos", ClipboardList],
                 ["schedules", "Horários", Calendar],
-                ["rooms", "Salas", DoorOpen],
                 ["notices", "Avisos", Bell],
               ].map(([key, label, Icon]) => (
                 <button
@@ -871,7 +942,6 @@ export function GesteccApp() {
                 postAction={postAction}
               />
             )}
-            {managerTab === "rooms" && <RoomsManager rooms={data.rooms} reservations={data.reservations} />}
             {managerTab === "notices" && (
               <NoticesManager
                 data={data}
@@ -954,15 +1024,20 @@ export function GesteccApp() {
 function GeneralDashboard({
   data,
   metrics,
+  role,
 }: {
   data: AppSnapshot;
   metrics: {
     occupied: number;
     free: number;
+    todaysSchedules: number;
     substitutions: number;
     notices: number;
+    reservations: number;
   };
+  role: "manager" | "teacher";
 }) {
+  const todaySchedules = data.schedules.filter((schedule) => schedule.weekday === new Date().getDay());
   return (
     <section className="grid gap-6">
       <div className="flex items-end justify-between gap-4">
@@ -973,8 +1048,8 @@ function GeneralDashboard({
         <div className="text-xs text-zinc-400">Atualizado às {new Date(data.now).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}</div>
       </div>
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <StatCard icon={<DoorOpen size={17} />} label="Salas ocupadas" value={metrics.occupied} tone="bg-rose-50 text-rose-600 dark:bg-rose-500/10" />
-        <StatCard icon={<Check size={17} />} label="Salas livres" value={metrics.free} tone="bg-emerald-50 text-emerald-600 dark:bg-emerald-500/10" />
+        <StatCard icon={<Calendar size={17} />} label="Aulas hoje" value={metrics.todaysSchedules} tone="bg-emerald-50 text-emerald-600 dark:bg-emerald-500/10" />
+        <StatCard icon={<DoorOpen size={17} />} label={role === "teacher" ? "Salas para ir hoje" : "Salas no sistema"} value={role === "teacher" ? new Set(todaySchedules.map((schedule) => schedule.roomName)).size : data.rooms.length} tone="bg-rose-50 text-rose-600 dark:bg-rose-500/10" />
         <StatCard icon={<ClipboardList size={17} />} label="Substituições hoje" value={metrics.substitutions} tone="bg-amber-50 text-amber-600 dark:bg-amber-500/10" />
         <StatCard icon={<Bell size={17} />} label="Avisos ativos" value={metrics.notices} tone="bg-blue-50 text-blue-600 dark:bg-blue-500/10" />
       </div>
@@ -1021,17 +1096,36 @@ function GeneralDashboard({
         </section>
       </div>
 
-      <section>
-        <div className="mb-3 flex items-center gap-2">
-          <span className="h-5 w-1 rounded-full bg-emerald-500" />
-          <h2 className="text-base font-black">Status das Salas em Tempo Real</h2>
-        </div>
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-6">
-          {data.rooms.map((room) => (
-            <RoomCard key={room.id} room={room} />
-          ))}
-        </div>
-      </section>
+      {role === "teacher" ? (
+        <section className="rounded-xl border border-zinc-200 bg-white p-4 shadow-sm dark:border-white/10 dark:bg-white/[0.04]">
+          <div className="mb-4 flex items-center gap-2">
+            <span className="h-5 w-1 rounded-full bg-emerald-500" />
+            <h2 className="text-base font-black">Salas que você precisa ir hoje</h2>
+          </div>
+          <ResponsiveTable
+            headers={["Período", "Disciplina", "Turma", "Sala"]}
+            rows={todaySchedules.map((schedule) => [
+              `${schedule.periodLabel} · ${schedule.startTime}-${schedule.endTime}`,
+              schedule.discipline,
+              schedule.classGroup,
+              schedule.roomName,
+            ])}
+            empty={<EmptyState icon={<DoorOpen size={26} />} title="Nenhuma sala programada para hoje" />}
+          />
+        </section>
+      ) : (
+        <section>
+          <div className="mb-3 flex items-center gap-2">
+            <span className="h-5 w-1 rounded-full bg-emerald-500" />
+            <h2 className="text-base font-black">Status das Salas em Tempo Real</h2>
+          </div>
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-6">
+            {data.rooms.map((room) => (
+              <RoomCard key={room.id} room={room} />
+            ))}
+          </div>
+        </section>
+      )}
     </section>
   );
 }
@@ -1116,7 +1210,7 @@ function RoomCard({ room }: { room: Room }) {
       <div className="flex items-start justify-between gap-3">
         <div>
           <h3 className="font-black text-zinc-950 dark:text-white">{room.name}</h3>
-          <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">{room.floor}</p>
+          <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">{room.kind}</p>
         </div>
         <span className={cx("h-2.5 w-2.5 rounded-full", room.status === "free" ? "bg-emerald-500" : room.status === "occupied" ? "bg-rose-500" : "bg-amber-500")} />
       </div>
@@ -1154,7 +1248,9 @@ function ManagerPeople({
               <div key={request.id} className="flex flex-col justify-between gap-3 rounded-xl bg-white p-4 shadow-sm dark:bg-white/10 sm:flex-row sm:items-center">
                 <div>
                   <div className="font-black">{request.fullName}</div>
-                  <div className="mt-1 text-sm text-zinc-500 dark:text-zinc-300">{request.discipline} · {request.email}</div>
+                  <div className="mt-1 text-sm text-zinc-500 dark:text-zinc-300">
+                    {request.discipline} · {contractTypeLabel(request.contractType)} · {request.email}
+                  </div>
                 </div>
                 <div className="flex gap-2">
                   <Button onClick={() => void postAction("approveRequest", { requestId: request.id })}>Aprovar</Button>
@@ -1169,10 +1265,11 @@ function ManagerPeople({
       <section className="rounded-xl border border-zinc-200 bg-white p-4 shadow-sm dark:border-white/10 dark:bg-white/[0.04]">
         <h2 className="mb-4 font-black">Todos os Professores</h2>
         <ResponsiveTable
-          headers={["Professor", "Disciplina", "E-mail", "Status"]}
+          headers={["Professor", "Disciplina", "Vínculo", "E-mail", "Status"]}
           rows={data.teachers.map((teacher) => [
             teacher.fullName,
             teacher.discipline,
+            contractTypeLabel(teacher.contractType),
             teacher.email,
             teacher.contractStatus === "active" ? "Ativo" : teacher.contractStatus,
           ])}
@@ -1251,18 +1348,22 @@ function ManagerPeople({
 
 function ContractsTable({ teachers }: { teachers: AppSnapshot["teachers"] }) {
   const rows = teachers.map((teacher) => {
-    const start = new Date(`${teacher.contractStart}T00:00:00`);
-    const end = teacher.contractEnd ? new Date(`${teacher.contractEnd}T00:00:00`) : new Date();
-    const months = Math.max(0, (end.getFullYear() - start.getFullYear()) * 12 + end.getMonth() - start.getMonth());
-    const years = Math.floor(months / 12);
-    const remainingMonths = months % 12;
-    const duration = `${years > 0 ? `${years} ano${years > 1 ? "s" : ""}` : ""}${years && remainingMonths ? " e " : ""}${remainingMonths > 0 ? `${remainingMonths} mês${remainingMonths > 1 ? "es" : ""}` : years ? "" : "0 meses"}`;
+    const end = teacher.contractEnd ? new Date(`${teacher.contractEnd}T00:00:00`) : null;
+    const monthsRemaining = end
+      ? Math.max(0, (end.getFullYear() - new Date().getFullYear()) * 12 + end.getMonth() - new Date().getMonth())
+      : null;
+    const years = monthsRemaining === null ? 0 : Math.floor(monthsRemaining / 12);
+    const remainingMonths = monthsRemaining === null ? 0 : monthsRemaining % 12;
+    const remaining = monthsRemaining === null
+      ? "Indeterminado"
+      : `${years > 0 ? `${years} ano${years > 1 ? "s" : ""}` : ""}${years && remainingMonths ? " e " : ""}${remainingMonths > 0 ? `${remainingMonths} mês${remainingMonths > 1 ? "es" : ""}` : years ? "" : "menos de 1 mês"}`;
     return [
       teacher.fullName,
       teacher.discipline,
+      contractTypeLabel(teacher.contractType),
       dateLabel(teacher.contractStart),
-      teacher.contractEnd ? dateLabel(teacher.contractEnd) : "Indeterminado",
-      duration,
+      teacher.contractEnd ? dateLabel(teacher.contractEnd) : "Tempo indeterminado",
+      teacher.contractType === "temporary" ? `Contrato de 2 anos · ${remaining}` : "Sem prazo de término",
       teacher.contractStatus === "active" ? "Ativo" : teacher.contractStatus,
     ];
   });
@@ -1271,7 +1372,7 @@ function ContractsTable({ teachers }: { teachers: AppSnapshot["teachers"] }) {
     <section className="rounded-xl border border-zinc-200 bg-white p-4 shadow-sm dark:border-white/10 dark:bg-white/[0.04]">
       <h2 className="mb-4 font-black">Prazos de Contratos</h2>
       <ResponsiveTable
-        headers={["Professor", "Disciplina", "Início", "Vencimento", "Tempo", "Status"]}
+        headers={["Professor", "Disciplina", "Vínculo", "Início", "Vencimento", "Tempo restante", "Status"]}
         rows={rows}
         empty={<EmptyState icon={<ClipboardList size={26} />} title="Nenhum contrato cadastrado" />}
       />
@@ -1293,25 +1394,58 @@ function SchedulesManager({
   postAction: (action: string, payload?: Record<string, string | number | null | undefined>) => Promise<boolean>;
 }) {
   const [selectedDiscipline, setSelectedDiscipline] = useState("");
+  const [selectedPeriod, setSelectedPeriod] = useState(periodOptions[0].value);
+  const [editingScheduleId, setEditingScheduleId] = useState<string | null>(null);
+  const editingSchedule = data.schedules.find((schedule) => schedule.id === editingScheduleId) ?? null;
   const teachersByDiscipline = selectedDiscipline
     ? data.teachers.filter((teacher) => teacher.discipline === selectedDiscipline)
     : data.teachers;
+  const selectedPeriodData = periodFromValue(selectedPeriod);
+  const periodChoices = periodOptions.some((period) => period.value === selectedPeriod)
+    ? periodOptions
+    : [
+        { label: selectedPeriodData.label, start: selectedPeriodData.start, end: selectedPeriodData.end, value: selectedPeriod },
+        ...periodOptions,
+      ];
+
+  const openNewSchedule = () => {
+    setEditingScheduleId(null);
+    setSelectedDiscipline("");
+    setSelectedPeriod(periodOptions[0].value);
+    setScheduleOpen(true);
+  };
+
+  const openEditSchedule = (schedule: Schedule) => {
+    setEditingScheduleId(schedule.id);
+    setSelectedDiscipline(schedule.discipline);
+    setSelectedPeriod(periodValue(schedule));
+    setScheduleOpen(true);
+  };
+
+  const closeForm = () => {
+    setEditingScheduleId(null);
+    setSelectedDiscipline("");
+    setSelectedPeriod(periodOptions[0].value);
+    setScheduleOpen(false);
+  };
 
   return (
     <section className="rounded-xl border border-zinc-200 bg-white p-4 shadow-sm dark:border-white/10 dark:bg-white/[0.04]">
       <div className="mb-4 flex items-center justify-between gap-4">
         <h2 className="font-black">Grade Horária Completa</h2>
-        <Button onClick={() => setScheduleOpen(!scheduleOpen)}>
+        <Button onClick={scheduleOpen && !editingSchedule ? closeForm : openNewSchedule}>
           <Plus size={15} /> Nova Aula
         </Button>
       </div>
 
       {scheduleOpen && (
         <form
+          key={editingSchedule?.id ?? "new-schedule"}
           className="mb-5 grid gap-3 rounded-xl border border-zinc-200 bg-zinc-50 p-4 dark:border-white/10 dark:bg-white/[0.04] md:grid-cols-3"
           onSubmit={async (event) => {
             event.preventDefault();
-            const ok = await postAction("addSchedule", {
+            const ok = await postAction(editingSchedule ? "updateSchedule" : "addSchedule", {
+              scheduleId: editingSchedule?.id,
               discipline: getFormString(event.currentTarget, "discipline"),
               teacherId: getFormString(event.currentTarget, "teacherId"),
               weekday: Number(getFormString(event.currentTarget, "weekday")),
@@ -1323,11 +1457,16 @@ function SchedulesManager({
             });
             if (ok) {
               event.currentTarget.reset();
-              setSelectedDiscipline("");
-              setScheduleOpen(false);
+              closeForm();
             }
           }}
         >
+          <div className="md:col-span-3">
+            <h3 className="font-black">{editingSchedule ? "Editar aula" : "Nova aula"}</h3>
+            <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
+              Escolha a disciplina, o professor, a sala e um dos 6 períodos.
+            </p>
+          </div>
           <SelectInput
             label="Disciplina da aula"
             name="discipline"
@@ -1338,7 +1477,7 @@ function SchedulesManager({
             <option value="" disabled>Selecione</option>
             {DISCIPLINES.map((discipline) => <option key={discipline}>{discipline}</option>)}
           </SelectInput>
-          <SelectInput label="Professor" name="teacherId" defaultValue="" required>
+          <SelectInput label="Professor" name="teacherId" defaultValue={editingSchedule?.teacherId ?? ""} required>
             <option value="" disabled>Selecione</option>
             {teachersByDiscipline.map((teacher) => (
               <option key={teacher.id} value={teacher.id}>
@@ -1346,14 +1485,27 @@ function SchedulesManager({
               </option>
             ))}
           </SelectInput>
-          <SelectInput label="Dia" name="weekday" defaultValue="1" required>
+          <SelectInput label="Dia" name="weekday" defaultValue={String(editingSchedule?.weekday ?? 1)} required>
             {workWeek.map((day) => <option key={day.value} value={day.value}>{day.label}</option>)}
           </SelectInput>
-          <TextInput label="Período" name="periodLabel" placeholder="1º período" required />
-          <TextInput label="Início" name="startTime" type="time" required />
-          <TextInput label="Término" name="endTime" type="time" required />
-          <TextInput label="Turma" name="classGroup" placeholder="Ex: 2º DS" required />
-          <SelectInput label="Sala" name="roomId" defaultValue="" required>
+          <SelectInput
+            label="Período"
+            name="periodPreset"
+            value={selectedPeriod}
+            onChange={(event) => setSelectedPeriod(event.currentTarget.value)}
+            required
+          >
+            {periodChoices.map((period) => (
+              <option key={period.value} value={period.value}>
+                {period.label} · {period.start}-{period.end}
+              </option>
+            ))}
+          </SelectInput>
+          <input type="hidden" name="periodLabel" value={selectedPeriodData.label} />
+          <input type="hidden" name="startTime" value={selectedPeriodData.start} />
+          <input type="hidden" name="endTime" value={selectedPeriodData.end} />
+          <TextInput label="Turma" name="classGroup" placeholder="Ex: 2º DS" defaultValue={editingSchedule?.classGroup ?? ""} required />
+          <SelectInput label="Sala" name="roomId" defaultValue={editingSchedule?.roomId ?? ""} required>
             <option value="" disabled>Selecione</option>
             {data.rooms.map((room) => <option key={room.id} value={room.id}>{room.name}</option>)}
           </SelectInput>
@@ -1363,13 +1515,10 @@ function SchedulesManager({
             </p>
           )}
           <div className="flex items-end gap-2 md:col-span-2">
-            <Button type="submit" disabled={loading}>Salvar horário</Button>
+            <Button type="submit" disabled={loading}>{editingSchedule ? "Salvar alterações" : "Salvar horário"}</Button>
             <Button
               variant="secondary"
-              onClick={() => {
-                setSelectedDiscipline("");
-                setScheduleOpen(false);
-              }}
+              onClick={closeForm}
             >
               Cancelar
             </Button>
@@ -1377,52 +1526,49 @@ function SchedulesManager({
         </form>
       )}
 
-      <ResponsiveTable
-        headers={["Dia", "Período", "Professor", "Disciplina", "Turma", "Sala"]}
-        rows={data.schedules.map((schedule) => [
-          weekdays[schedule.weekday],
-          `${schedule.periodLabel} · ${schedule.startTime}-${schedule.endTime}`,
-          schedule.teacherName,
-          schedule.discipline,
-          schedule.classGroup,
-          schedule.roomName,
-        ])}
-        empty={<EmptyState icon={<Calendar size={26} />} title="Nenhuma aula cadastrada" />}
-      />
+      {data.schedules.length === 0 ? (
+        <EmptyState icon={<Calendar size={26} />} title="Nenhuma aula cadastrada" />
+      ) : (
+        <div className="grid gap-3">
+          {data.schedules.map((schedule) => (
+            <article key={schedule.id} className="rounded-xl border border-zinc-100 bg-zinc-50 p-4 dark:border-white/10 dark:bg-white/[0.03]">
+              <div className="flex flex-col justify-between gap-4 lg:flex-row lg:items-center">
+                <div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <h3 className="font-black">{schedule.discipline}</h3>
+                    <span className="rounded-full bg-white px-2 py-1 text-[11px] font-bold text-[#e95635] dark:bg-white/10">
+                      {weekdays[schedule.weekday]}
+                    </span>
+                  </div>
+                  <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-300">
+                    {schedule.teacherName} · {schedule.classGroup} · {schedule.roomName}
+                  </p>
+                  <p className="mt-1 text-xs font-semibold text-zinc-400">
+                    {schedule.periodLabel} · {schedule.startTime}-{schedule.endTime}
+                  </p>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <Button variant="secondary" className="h-9 px-3" onClick={() => openEditSchedule(schedule)}>
+                    <Pencil size={14} /> Editar
+                  </Button>
+                  <Button
+                    variant="danger"
+                    className="h-9 px-3"
+                    onClick={() => {
+                      if (window.confirm("Tem certeza que deseja apagar esta aula?")) {
+                        void postAction("deleteSchedule", { scheduleId: schedule.id });
+                      }
+                    }}
+                  >
+                    <Trash2 size={14} /> Apagar
+                  </Button>
+                </div>
+              </div>
+            </article>
+          ))}
+        </div>
+      )}
     </section>
-  );
-}
-
-function RoomsManager({ rooms, reservations }: { rooms: AppSnapshot["rooms"]; reservations: AppSnapshot["reservations"] }) {
-  return (
-    <div className="grid gap-5">
-      <section>
-        <h2 className="mb-3 font-black">Salas Livres</h2>
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          {rooms.filter((room) => room.status === "free").map((room) => <RoomCard key={room.id} room={room} />)}
-        </div>
-      </section>
-      <section>
-        <h2 className="mb-3 font-black">Salas Reservadas/Ocupadas</h2>
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          {rooms.filter((room) => room.status !== "free").map((room) => <RoomCard key={room.id} room={room} />)}
-        </div>
-      </section>
-      <section className="rounded-xl border border-zinc-200 bg-white p-4 shadow-sm dark:border-white/10 dark:bg-white/[0.04]">
-        <h2 className="mb-4 font-black">Reservas Aprovadas</h2>
-        <ResponsiveTable
-          headers={["Sala", "Professor", "Data", "Horário", "Motivo"]}
-          rows={reservations.map((reservation) => [
-            reservation.roomName,
-            reservation.teacherName,
-            dateLabel(reservation.date),
-            `${reservation.startTime}-${reservation.endTime}`,
-            reservation.reason ?? "—",
-          ])}
-          empty={<EmptyState icon={<DoorOpen size={26} />} title="Nenhuma reserva aprovada" />}
-        />
-      </section>
-    </div>
   );
 }
 
@@ -1605,49 +1751,60 @@ function TeacherOverview({
 }
 
 function TeacherSchedules({ schedules }: { schedules: AppSnapshot["schedules"] }) {
-  const periods = Array.from(new Set(schedules.map((schedule) => `${schedule.periodLabel}|${schedule.startTime}|${schedule.endTime}`)));
+  const disciplines = Array.from(new Set(schedules.map((schedule) => schedule.discipline))).sort((a, b) => a.localeCompare(b));
   return (
-    <section className="rounded-xl border border-zinc-200 bg-white p-4 shadow-sm dark:border-white/10 dark:bg-white/[0.04]">
-      <h2 className="mb-4 font-black">Horários</h2>
+    <section className="grid gap-5">
+      <h2 className="text-2xl font-black">Horários por disciplina</h2>
       {schedules.length === 0 ? (
         <EmptyState icon={<Calendar size={26} />} title="Nenhum horário cadastrado" />
       ) : (
-        <div className="overflow-x-auto">
-          <table className="w-full min-w-[760px] border-separate border-spacing-2 text-sm">
-            <thead>
-              <tr>
-                <th className="rounded-lg bg-zinc-100 p-3 text-left dark:bg-white/5">Período</th>
-                {workWeek.map((day) => (
-                  <th key={day.value} className="rounded-lg bg-zinc-100 p-3 text-left dark:bg-white/5">{day.label}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {periods.map((period) => {
-                const [label, start, end] = period.split("|");
-                return (
-                  <tr key={period}>
-                    <td className="rounded-lg bg-zinc-50 p-3 font-bold dark:bg-white/[0.03]">{label}<br /><span className="text-xs font-normal text-zinc-400">{start}-{end}</span></td>
-                    {workWeek.map((day) => {
-                      const item = schedules.find((schedule) => schedule.weekday === day.value && schedule.periodLabel === label);
-                      return (
-                        <td key={day.value} className="h-24 rounded-lg border border-zinc-100 p-3 align-top dark:border-white/10">
-                          {item ? (
-                            <div>
-                              <div className="font-black">{item.discipline}</div>
-                              <div className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">{item.classGroup} · {item.roomName}</div>
-                            </div>
-                          ) : (
-                            <span className="text-zinc-300">—</span>
-                          )}
-                        </td>
-                      );
-                    })}
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
+        <div className="grid gap-5">
+          {disciplines.map((discipline) => {
+            const disciplineSchedules = schedules.filter((schedule) => schedule.discipline === discipline);
+            return (
+              <section key={discipline} className="rounded-xl border border-zinc-200 bg-white p-4 shadow-sm dark:border-white/10 dark:bg-white/[0.04]">
+                <h3 className="mb-4 font-black">{discipline}</h3>
+                <div className="overflow-x-auto">
+                  <table className="w-full min-w-[760px] border-separate border-spacing-2 text-sm">
+                    <thead>
+                      <tr>
+                        <th className="rounded-lg bg-zinc-100 p-3 text-left dark:bg-white/5">Período</th>
+                        {workWeek.map((day) => (
+                          <th key={day.value} className="rounded-lg bg-zinc-100 p-3 text-left dark:bg-white/5">{day.label}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {periodOptions.map((period) => (
+                        <tr key={period.value}>
+                          <td className="rounded-lg bg-zinc-50 p-3 font-bold dark:bg-white/[0.03]">
+                            {period.label}
+                            <br />
+                            <span className="text-xs font-normal text-zinc-400">{period.start}-{period.end}</span>
+                          </td>
+                          {workWeek.map((day) => {
+                            const item = disciplineSchedules.find((schedule) => schedule.weekday === day.value && schedule.periodLabel === period.label);
+                            return (
+                              <td key={day.value} className="h-24 rounded-lg border border-zinc-100 p-3 align-top dark:border-white/10">
+                                {item ? (
+                                  <div>
+                                    <div className="font-black">{item.classGroup}</div>
+                                    <div className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">{item.roomName}</div>
+                                  </div>
+                                ) : (
+                                  <span className="text-zinc-300">—</span>
+                                )}
+                              </td>
+                            );
+                          })}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </section>
+            );
+          })}
         </div>
       )}
     </section>

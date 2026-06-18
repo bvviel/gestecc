@@ -19,6 +19,7 @@ export const demoTeachers: Teacher[] = [
     fullName: "Ana Beatriz Martins",
     discipline: "Matemática",
     email: "ana.martins@etec.sp.gov.br",
+    contractType: "permanent",
     contractStart: "2024-02-05",
     contractEnd: null,
     contractStatus: "active",
@@ -30,6 +31,7 @@ export const demoTeachers: Teacher[] = [
     fullName: "Bruno Queiroz Gola",
     discipline: "Português",
     email: "bruno.gola@etec.sp.gov.br",
+    contractType: "temporary",
     contractStart: "2023-08-01",
     contractEnd: "2026-12-20",
     contractStatus: "active",
@@ -41,6 +43,7 @@ export const demoTeachers: Teacher[] = [
     fullName: "Camila Ferreira Santos",
     discipline: "Biologia",
     email: "camila.santos@etec.sp.gov.br",
+    contractType: "permanent",
     contractStart: "2022-01-24",
     contractEnd: null,
     contractStatus: "active",
@@ -52,8 +55,8 @@ export const demoTeachers: Teacher[] = [
 export const demoNotices: Notice[] = [
   {
     id: "notice-1",
-    title: "4º andar interditado",
-    body: "O 4º andar está interditado para manutenção até sexta-feira. Por favor, utilize as salas dos andares inferiores.",
+    title: "Área em manutenção",
+    body: "Uma área da escola está em manutenção até sexta-feira. Confira a orientação da gestão antes de usar os espaços próximos.",
     category: "Manutenção",
     createdAt: nowIso(),
     expiresAt: null,
@@ -76,33 +79,24 @@ export const demoNotices: Notice[] = [
   },
 ];
 
-function classroomFloor(number: number) {
-  if (number <= 3) return "Térreo";
-  if (number <= 6) return "1º andar";
-  if (number <= 17) return "2º andar";
-  if (number <= 27) return "3º andar";
-  if (number <= 37) return "4º andar";
-  return "Bloco B";
-}
-
 const additionalClassrooms = Array.from({ length: 35 }, (_, index) => {
   const number = index + 9;
-  return [`Sala ${String(number).padStart(2, "0")}`, classroomFloor(number), "Sala"] as const;
+  return [`Sala ${String(number).padStart(2, "0")}`, "", "Sala"] as const;
 });
 
 export const demoRooms: Room[] = [
-  ["Auditório", "Térreo", "Evento"],
-  ["Lab. Informática", "2º andar", "Laboratório"],
-  ["Lab. Química", "2º andar", "Laboratório"],
-  ["Sala 01", "Térreo", "Sala"],
-  ["Sala 02", "Térreo", "Sala"],
-  ["Sala 03", "Térreo", "Sala"],
-  ["Sala 04", "1º andar", "Sala"],
-  ["Sala 05", "1º andar", "Sala"],
-  ["Sala 06", "1º andar", "Sala"],
-  ["Sala 07", "2º andar", "Sala"],
-  ["Sala 08", "2º andar", "Sala"],
-  ["Sala Maker", "Bloco B", "Laboratório"],
+  ["Auditório", "", "Evento"],
+  ["Lab. Informática", "", "Laboratório"],
+  ["Lab. Química", "", "Laboratório"],
+  ["Sala 01", "", "Sala"],
+  ["Sala 02", "", "Sala"],
+  ["Sala 03", "", "Sala"],
+  ["Sala 04", "", "Sala"],
+  ["Sala 05", "", "Sala"],
+  ["Sala 06", "", "Sala"],
+  ["Sala 07", "", "Sala"],
+  ["Sala 08", "", "Sala"],
+  ["Sala Maker", "", "Laboratório"],
   ...additionalClassrooms,
 ].map(([name, floor, kind], index) => ({
   id: `room-${index + 1}`,
