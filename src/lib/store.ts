@@ -1,0 +1,1001 @@
+import { createMemoryState, type MemoryState } from "./demo-data";
+import { getSupabaseAdmin, isSupabaseConfigured } from "./supabase-server";
+import { hashPassword, signSession, verifyPassword } from "./security";
+import type {
+  AppSnapshot,
+  Notification,
+  Reservation,
+  Room,
+  Schedule,
+  SessionClaims,
+  Substitution,
+  Teacher,
+  TeacherRequest,
+} from "./types";
+
+type LoginResult =
+  | { ok: true; token: string; role: "manager"; name: string; email: string }
+  | { ok: true; token: string; role: "teacher"; name: string; email: string; teacherId: string }
+  | { ok: false; message: string; status?: "pending" | "rejected" | "invalid" };
+
+type ActionPayload = Record<string, string | number | null | undefined>;
+
+const globalForMemory = globalThis as typeof globalThis & {
+  __gesteccMemory?: MemoryState;
+};
+
+function nowIso() {
+  return new Date().toISOString();
+}
+
+function today() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function newId(prefix: string) {
+  return `${prefix}-${crypto.randomUUID()}`;
+}
+
+function memory() {
+  if (!globalForMemory.__gesteccMemory) {
+    const state = createMemoryState();
+    state.teacherSecrets["teacher-ana"] = hashPassword("professor123");
+    state.teacherSecrets["teacher-bruno"] = hashPassword("professor123");
+    state.teacherSecrets["teacher-camila"] = hashPassword("professor123");
+    globalForMemory.__gesteccMemory = state;
+  }
+
+  return globalForMemory.__gesteccMemory;
+}
+
+function rowError(message: string): never {
+  throw new Error(message);
+}
+
+function normalizeEmail(email: string) {
+  return email.trim().toLowerCase();
+}
+
+function getManagerCredentials() {
+  return {
+    username: process.env.GESTECC_MANAGER_USERNAME,
+    password: process.env.GESTECC_MANAGER_PASSWORD,
+  };
+}
+
+function normalizeManagerUsername(value: string) {
+  return value
+    .trim()
+    .normalize("NFD")
+    .replace(/\p{Diacritic}/gu, "")
+    .toUpperCase();
+}
+
+function mapTeacher(row: Record<string, unknown>): Teacher {
+  return {
+    id: String(row.id),
+    fullName: String(row.full_name),
+    discipline: String(row.discipline ?? ""),
+    email: String(row.email),
+    contractStart: String(row.contract_start),
+    contractEnd: row.contract_end ? String(row.contract_end) : null,
+    contractStatus: String(row.contract_status ?? "active") as Teacher["contractStatus"],
+    avatarUrl: row.avatar_url ? String(row.avatar_url) : null,
+    createdAt: String(row.created_at),
+  };
+}
+
+function mapRequest(row: Record<string, unknown>): TeacherRequest {
+  return {
+    id: String(row.id),
+    fullName: String(row.full_name),
+    discipline: String(row.discipline),
+    email: String(row.email),
+    status: String(row.status) as TeacherRequest["status"],
+    rejectionReason: row.rejection_reason ? String(row.rejection_reason) : null,
+    createdAt: String(row.created_at),
+    reviewedAt: row.reviewed_at ? String(row.reviewed_at) : null,
+  };
+}
+
+function mapNotice(row: Record<string, unknown>) {
+  return {
+    id: String(row.id),
+    title: String(row.title),
+    body: String(row.body),
+    category: String(row.category ?? "Geral"),
+    createdAt: String(row.created_at),
+    expiresAt: row.expires_at ? String(row.expires_at) : null,
+  };
+}
+
+function mapRoom(row: Record<string, unknown>): Room {
+  return {
+    id: String(row.id),
+    name: String(row.name),
+    floor: String(row.floor),
+    kind: String(row.kind),
+    status: String(row.status) as Room["status"],
+    currentTeacherId: row.current_teacher_id ? String(row.current_teacher_id) : null,
+    currentTeacherName: row.current_teacher_name ? String(row.current_teacher_name) : null,
+    currentClass: row.current_class ? String(row.current_class) : null,
+    currentPeriod: row.current_period ? String(row.current_period) : null,
+    updatedAt: String(row.updated_at),
+  };
+}
+
+function mapSubstitution(row: Record<string, unknown>): Substitution {
+  return {
+    id: String(row.id),
+    date: String(row.date),
+    originalTeacherId: row.original_teacher_id ? String(row.original_teacher_id) : null,
+    originalTeacherName: String(row.original_teacher_name),
+    substituteTeacherId: row.substitute_teacher_id ? String(row.substitute_teacher_id) : null,
+    substituteTeacherName: String(row.substitute_teacher_name),
+    discipline: String(row.discipline),
+    classGroup: String(row.class_group),
+    roomId: row.room_id ? String(row.room_id) : null,
+    roomName: String(row.room_name),
+    createdAt: String(row.created_at),
+  };
+}
+
+function mapSchedule(row: Record<string, unknown>): Schedule {
+  return {
+    id: String(row.id),
+    teacherId: String(row.teacher_id),
+    teacherName: String(row.teacher_name),
+    discipline: String(row.discipline),
+    classGroup: String(row.class_group),
+    roomId: row.room_id ? String(row.room_id) : null,
+    roomName: String(row.room_name),
+    weekday: Number(row.weekday),
+    periodLabel: String(row.period_label),
+    startTime: String(row.start_time).slice(0, 5),
+    endTime: String(row.end_time).slice(0, 5),
+  };
+}
+
+function mapReservation(row: Record<string, unknown>): Reservation {
+  return {
+    id: String(row.id),
+    teacherId: String(row.teacher_id),
+    teacherName: String(row.teacher_name),
+    roomId: row.room_id ? String(row.room_id) : null,
+    roomName: String(row.room_name),
+    date: String(row.date),
+    startTime: String(row.start_time).slice(0, 5),
+    endTime: String(row.end_time).slice(0, 5),
+    reason: row.reason ? String(row.reason) : null,
+    status: String(row.status) as Reservation["status"],
+    createdAt: String(row.created_at),
+  };
+}
+
+function mapNotification(row: Record<string, unknown>): Notification {
+  return {
+    id: String(row.id),
+    targetRole: String(row.target_role) as Notification["targetRole"],
+    teacherId: row.teacher_id ? String(row.teacher_id) : null,
+    title: String(row.title),
+    body: String(row.body),
+    kind: String(row.kind),
+    readAt: row.read_at ? String(row.read_at) : null,
+    payload: (row.payload as Record<string, unknown> | null) ?? null,
+    createdAt: String(row.created_at),
+  };
+}
+
+async function queryAll<T>(
+  table: string,
+  mapper: (row: Record<string, unknown>) => T,
+  orderColumn = "created_at",
+  ascending = false,
+) {
+  const supabase = getSupabaseAdmin();
+  if (!supabase) rowError("Supabase não configurado.");
+
+  const { data, error } = await supabase.from(table).select("*").order(orderColumn, { ascending });
+  if (error) rowError(error.message);
+  return (data ?? []).map((row) => mapper(row as Record<string, unknown>));
+}
+
+export async function getSnapshot(claims: SessionClaims): Promise<AppSnapshot> {
+  if (!isSupabaseConfigured()) {
+    const state = memory();
+    const teacherFilter = (item: { teacherId?: string; targetRole?: string }) =>
+      claims.role === "manager" ||
+      item.teacherId === claims.teacherId ||
+      item.targetRole === "manager";
+
+    return {
+      configured: false,
+      mode: "memory",
+      now: nowIso(),
+      notices: [...state.notices].sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
+      rooms: [...state.rooms],
+      substitutions: state.substitutions.filter((item) => item.date === today()),
+      teachers: claims.role === "manager"
+        ? [...state.teachers]
+        : state.teachers.filter((item) => item.id === claims.teacherId),
+      requests: claims.role === "manager" ? [...state.requests] : [],
+      schedules: claims.role === "manager"
+        ? [...state.schedules]
+        : state.schedules.filter((item) => item.teacherId === claims.teacherId),
+      reservations: state.reservations.filter((item) => teacherFilter(item)),
+      notifications: state.notifications.filter((item) =>
+        claims.role === "manager"
+          ? item.targetRole === "manager"
+          : item.teacherId === claims.teacherId,
+      ),
+    };
+  }
+
+  const supabase = getSupabaseAdmin();
+  if (!supabase) rowError("Supabase não configurado.");
+
+  const [
+    notices,
+    rooms,
+    substitutions,
+    teachers,
+    requests,
+    schedules,
+    reservations,
+    notifications,
+  ] = await Promise.all([
+    queryAll("notices", mapNotice),
+    queryAll("rooms", mapRoom, "name", true),
+    supabase
+      .from("substitutions")
+      .select("*")
+      .eq("date", today())
+      .order("created_at", { ascending: false })
+      .then(({ data, error }) => {
+        if (error) rowError(error.message);
+        return (data ?? []).map((row) => mapSubstitution(row as Record<string, unknown>));
+      }),
+    supabase
+      .from("teachers")
+      .select("*")
+      .order("full_name", { ascending: true })
+      .then(({ data, error }) => {
+        if (error) rowError(error.message);
+        const mapped = (data ?? []).map((row) => mapTeacher(row as Record<string, unknown>));
+        return claims.role === "manager"
+          ? mapped
+          : mapped.filter((item) => item.id === claims.teacherId);
+      }),
+    claims.role === "manager" ? queryAll("teacher_requests", mapRequest) : Promise.resolve([]),
+    supabase
+      .from("schedules")
+      .select("*")
+      .order("weekday", { ascending: true })
+      .order("start_time", { ascending: true })
+      .then(({ data, error }) => {
+        if (error) rowError(error.message);
+        const mapped = (data ?? []).map((row) => mapSchedule(row as Record<string, unknown>));
+        return claims.role === "manager"
+          ? mapped
+          : mapped.filter((item) => item.teacherId === claims.teacherId);
+      }),
+    supabase
+      .from("reservations")
+      .select("*")
+      .order("created_at", { ascending: false })
+      .then(({ data, error }) => {
+        if (error) rowError(error.message);
+        const mapped = (data ?? []).map((row) => mapReservation(row as Record<string, unknown>));
+        return claims.role === "manager"
+          ? mapped
+          : mapped.filter((item) => item.teacherId === claims.teacherId);
+      }),
+    supabase
+      .from("notifications")
+      .select("*")
+      .order("created_at", { ascending: false })
+      .then(({ data, error }) => {
+        if (error) rowError(error.message);
+        const mapped = (data ?? []).map((row) => mapNotification(row as Record<string, unknown>));
+        return mapped.filter((item) =>
+          claims.role === "manager"
+            ? item.targetRole === "manager"
+            : item.teacherId === claims.teacherId,
+        );
+      }),
+  ]);
+
+  return {
+    configured: true,
+    mode: "supabase",
+    now: nowIso(),
+    notices,
+    rooms,
+    substitutions,
+    teachers,
+    requests,
+    schedules,
+    reservations,
+    notifications,
+  };
+}
+
+export async function loginManager(username: string, password: string): Promise<LoginResult> {
+  const credentials = getManagerCredentials();
+  if (!credentials.username || !credentials.password) {
+    return {
+      ok: false,
+      status: "invalid",
+      message: "Login da gestão ainda não foi configurado no servidor.",
+    };
+  }
+
+  const acceptedUsernames = [
+    credentials.username,
+    "ETECMAS@GESTÃO-GESTEC",
+    "ETECMAS@GESTAO-GESTEC",
+  ]
+    .filter(Boolean)
+    .map((value) => normalizeManagerUsername(value!));
+
+  if (!acceptedUsernames.includes(normalizeManagerUsername(username)) || password !== credentials.password) {
+    return { ok: false, status: "invalid", message: "Usuário ou senha da gestão inválidos." };
+  }
+
+  const token = signSession({
+    role: "manager",
+    name: "Gestão ETEC",
+    email: credentials.username,
+  });
+
+  return { ok: true, token, role: "manager", name: "Gestão ETEC", email: credentials.username };
+}
+
+export async function loginTeacher(emailValue: string, password: string): Promise<LoginResult> {
+  const email = normalizeEmail(emailValue);
+
+  if (!isSupabaseConfigured()) {
+    const state = memory();
+    const teacher = state.teachers.find((item) => item.email.toLowerCase() === email);
+    if (teacher) {
+      const hash = state.teacherSecrets[teacher.id];
+      if (hash && verifyPassword(password, hash)) {
+        const token = signSession({
+          role: "teacher",
+          name: teacher.fullName,
+          email: teacher.email,
+          teacherId: teacher.id,
+        });
+        return {
+          ok: true,
+          token,
+          role: "teacher",
+          name: teacher.fullName,
+          email: teacher.email,
+          teacherId: teacher.id,
+        };
+      }
+    }
+
+    const request = state.requests.find((item) => item.email.toLowerCase() === email);
+    if (request?.status === "pending") {
+      return {
+        ok: false,
+        status: "pending",
+        message: "Seu acesso está pendente de aprovação pela gestão.",
+      };
+    }
+    if (request?.status === "rejected") {
+      return {
+        ok: false,
+        status: "rejected",
+        message: "Sua solicitação foi recusada pela gestão.",
+      };
+    }
+
+    return { ok: false, status: "invalid", message: "E-mail ou senha inválidos." };
+  }
+
+  const supabase = getSupabaseAdmin();
+  if (!supabase) rowError("Supabase não configurado.");
+
+  const { data: teacherRow, error: teacherError } = await supabase
+    .from("teachers")
+    .select("*, password_hash")
+    .eq("email", email)
+    .maybeSingle();
+
+  if (teacherError) rowError(teacherError.message);
+
+  if (teacherRow) {
+    const hash = String((teacherRow as Record<string, unknown>).password_hash ?? "");
+    if (hash && verifyPassword(password, hash)) {
+      const teacher = mapTeacher(teacherRow as Record<string, unknown>);
+      const token = signSession({
+        role: "teacher",
+        name: teacher.fullName,
+        email: teacher.email,
+        teacherId: teacher.id,
+      });
+      return {
+        ok: true,
+        token,
+        role: "teacher",
+        name: teacher.fullName,
+        email: teacher.email,
+        teacherId: teacher.id,
+      };
+    }
+  }
+
+  const { data: requestRow, error: requestError } = await supabase
+    .from("teacher_requests")
+    .select("*")
+    .eq("email", email)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (requestError) rowError(requestError.message);
+
+  if (requestRow) {
+    const request = mapRequest(requestRow as Record<string, unknown>);
+    if (request.status === "pending") {
+      return {
+        ok: false,
+        status: "pending",
+        message: "Seu acesso está pendente de aprovação pela gestão.",
+      };
+    }
+    if (request.status === "rejected") {
+      return {
+        ok: false,
+        status: "rejected",
+        message: "Sua solicitação foi recusada pela gestão.",
+      };
+    }
+  }
+
+  return { ok: false, status: "invalid", message: "E-mail ou senha inválidos." };
+}
+
+export async function createTeacherRequest(payload: ActionPayload) {
+  const fullName = String(payload.fullName ?? "").trim();
+  const discipline = String(payload.discipline ?? "").trim();
+  const email = normalizeEmail(String(payload.email ?? ""));
+  const password = String(payload.password ?? "");
+
+  if (!fullName || !discipline || !email || password.length < 6) {
+    rowError("Preencha todos os dados obrigatórios para solicitar cadastro.");
+  }
+
+  const passwordHash = hashPassword(password);
+
+  if (!isSupabaseConfigured()) {
+    const state = memory();
+    if (
+      state.teachers.some((item) => item.email.toLowerCase() === email) ||
+      state.requests.some((item) => item.email.toLowerCase() === email && item.status === "pending")
+    ) {
+      rowError("Já existe um cadastro ou solicitação pendente para este e-mail.");
+    }
+
+    const request: TeacherRequest = {
+      id: newId("request"),
+      fullName,
+      discipline,
+      email,
+      status: "pending",
+      rejectionReason: null,
+      createdAt: nowIso(),
+      reviewedAt: null,
+    };
+    state.requests.unshift(request);
+    state.requestSecrets[request.id] = passwordHash;
+    state.notifications.unshift({
+      id: newId("notification"),
+      targetRole: "manager",
+      teacherId: null,
+      title: "Nova solicitação de cadastro",
+      body: `${fullName} solicitou acesso como professor de ${discipline}.`,
+      kind: "teacher_request",
+      readAt: null,
+      payload: { requestId: request.id },
+      createdAt: nowIso(),
+    });
+    return request;
+  }
+
+  const supabase = getSupabaseAdmin();
+  if (!supabase) rowError("Supabase não configurado.");
+
+  const { data: existingTeacher, error: existingTeacherError } = await supabase
+    .from("teachers")
+    .select("id")
+    .eq("email", email)
+    .maybeSingle();
+  if (existingTeacherError) rowError(existingTeacherError.message);
+  if (existingTeacher) rowError("Já existe um professor aprovado com este e-mail.");
+
+  const { data: existingRequest, error: existingRequestError } = await supabase
+    .from("teacher_requests")
+    .select("id,status")
+    .eq("email", email)
+    .eq("status", "pending")
+    .maybeSingle();
+  if (existingRequestError) rowError(existingRequestError.message);
+  if (existingRequest) rowError("Já existe uma solicitação pendente para este e-mail.");
+
+  const { data, error } = await supabase
+    .from("teacher_requests")
+    .insert({
+      full_name: fullName,
+      discipline,
+      email,
+      password_hash: passwordHash,
+      status: "pending",
+    })
+    .select("*")
+    .single();
+
+  if (error) rowError(error.message);
+  const request = mapRequest(data as Record<string, unknown>);
+
+  const { error: notificationError } = await supabase.from("notifications").insert({
+    target_role: "manager",
+    teacher_id: null,
+    title: "Nova solicitação de cadastro",
+    body: `${fullName} solicitou acesso como professor de ${discipline}.`,
+    kind: "teacher_request",
+    payload: { requestId: request.id },
+  });
+
+  if (notificationError) rowError(notificationError.message);
+  return request;
+}
+
+async function approveRequest(claims: SessionClaims, requestId: string) {
+  if (claims.role !== "manager") rowError("Apenas a gestão pode aprovar cadastros.");
+
+  if (!isSupabaseConfigured()) {
+    const state = memory();
+    const request = state.requests.find((item) => item.id === requestId);
+    if (!request || request.status !== "pending") rowError("Solicitação não encontrada.");
+
+    request.status = "approved";
+    request.reviewedAt = nowIso();
+
+    const teacher: Teacher = {
+      id: newId("teacher"),
+      fullName: request.fullName,
+      discipline: request.discipline,
+      email: request.email,
+      contractStart: today(),
+      contractEnd: null,
+      contractStatus: "active",
+      avatarUrl: null,
+      createdAt: nowIso(),
+    };
+
+    state.teachers.push(teacher);
+    state.teacherSecrets[teacher.id] = state.requestSecrets[request.id];
+    state.notifications.unshift({
+      id: newId("notification"),
+      targetRole: "teacher",
+      teacherId: teacher.id,
+      title: "Cadastro aprovado",
+      body: "Sua solicitação foi aprovada. Você já pode acessar o GestECC.",
+      kind: "request_approved",
+      readAt: null,
+      payload: null,
+      createdAt: nowIso(),
+    });
+    return;
+  }
+
+  const supabase = getSupabaseAdmin();
+  if (!supabase) rowError("Supabase não configurado.");
+
+  const { data: requestRow, error: requestError } = await supabase
+    .from("teacher_requests")
+    .select("*")
+    .eq("id", requestId)
+    .eq("status", "pending")
+    .single();
+
+  if (requestError) rowError(requestError.message);
+  const requestData = requestRow as Record<string, unknown>;
+
+  const { data: teacherRow, error: teacherError } = await supabase
+    .from("teachers")
+    .insert({
+      request_id: requestId,
+      full_name: requestData.full_name,
+      discipline: requestData.discipline,
+      email: requestData.email,
+      password_hash: requestData.password_hash,
+      contract_start: today(),
+      contract_status: "active",
+    })
+    .select("*")
+    .single();
+
+  if (teacherError) rowError(teacherError.message);
+  const teacher = mapTeacher(teacherRow as Record<string, unknown>);
+
+  const { error: updateError } = await supabase
+    .from("teacher_requests")
+    .update({ status: "approved", reviewed_at: nowIso() })
+    .eq("id", requestId);
+  if (updateError) rowError(updateError.message);
+
+  const { error: notificationError } = await supabase.from("notifications").insert({
+    target_role: "teacher",
+    teacher_id: teacher.id,
+    title: "Cadastro aprovado",
+    body: "Sua solicitação foi aprovada. Você já pode acessar o GestECC.",
+    kind: "request_approved",
+  });
+  if (notificationError) rowError(notificationError.message);
+}
+
+async function rejectRequest(claims: SessionClaims, requestId: string, reason: string) {
+  if (claims.role !== "manager") rowError("Apenas a gestão pode recusar cadastros.");
+
+  if (!isSupabaseConfigured()) {
+    const state = memory();
+    const request = state.requests.find((item) => item.id === requestId);
+    if (!request || request.status !== "pending") rowError("Solicitação não encontrada.");
+    request.status = "rejected";
+    request.rejectionReason = reason || "Solicitação recusada pela gestão.";
+    request.reviewedAt = nowIso();
+    return;
+  }
+
+  const supabase = getSupabaseAdmin();
+  if (!supabase) rowError("Supabase não configurado.");
+  const { error } = await supabase
+    .from("teacher_requests")
+    .update({
+      status: "rejected",
+      rejection_reason: reason || "Solicitação recusada pela gestão.",
+      reviewed_at: nowIso(),
+    })
+    .eq("id", requestId);
+  if (error) rowError(error.message);
+}
+
+function requireManager(claims: SessionClaims) {
+  if (claims.role !== "manager") rowError("Ação permitida apenas para a gestão.");
+}
+
+function findMemoryTeacher(state: MemoryState, teacherId: string) {
+  return state.teachers.find((item) => item.id === teacherId) ?? rowError("Professor não encontrado.");
+}
+
+function findMemoryRoom(state: MemoryState, roomId: string) {
+  return state.rooms.find((item) => item.id === roomId) ?? rowError("Sala não encontrada.");
+}
+
+async function lookupTeacher(teacherId: string) {
+  if (!isSupabaseConfigured()) return findMemoryTeacher(memory(), teacherId);
+  const supabase = getSupabaseAdmin();
+  if (!supabase) rowError("Supabase não configurado.");
+  const { data, error } = await supabase.from("teachers").select("*").eq("id", teacherId).single();
+  if (error) rowError(error.message);
+  return mapTeacher(data as Record<string, unknown>);
+}
+
+async function lookupRoom(roomId: string) {
+  if (!isSupabaseConfigured()) return findMemoryRoom(memory(), roomId);
+  const supabase = getSupabaseAdmin();
+  if (!supabase) rowError("Supabase não configurado.");
+  const { data, error } = await supabase.from("rooms").select("*").eq("id", roomId).single();
+  if (error) rowError(error.message);
+  return mapRoom(data as Record<string, unknown>);
+}
+
+export async function performAction(
+  claims: SessionClaims,
+  action: string,
+  payload: ActionPayload,
+) {
+  if (action === "approveRequest") {
+    await approveRequest(claims, String(payload.requestId ?? ""));
+    return getSnapshot(claims);
+  }
+
+  if (action === "rejectRequest") {
+    await rejectRequest(
+      claims,
+      String(payload.requestId ?? ""),
+      String(payload.reason ?? "Solicitação recusada pela gestão."),
+    );
+    return getSnapshot(claims);
+  }
+
+  if (action === "addNotice") {
+    requireManager(claims);
+    const title = String(payload.title ?? "").trim();
+    const body = String(payload.body ?? "").trim();
+    const category = String(payload.category ?? "Geral").trim() || "Geral";
+    if (!title || !body) rowError("Informe título e descrição do aviso.");
+
+    if (!isSupabaseConfigured()) {
+      memory().notices.unshift({
+        id: newId("notice"),
+        title,
+        body,
+        category,
+        createdAt: nowIso(),
+        expiresAt: payload.expiresAt ? String(payload.expiresAt) : null,
+      });
+    } else {
+      const supabase = getSupabaseAdmin();
+      if (!supabase) rowError("Supabase não configurado.");
+      const { error } = await supabase.from("notices").insert({
+        title,
+        body,
+        category,
+        expires_at: payload.expiresAt || null,
+      });
+      if (error) rowError(error.message);
+    }
+    return getSnapshot(claims);
+  }
+
+  if (action === "deleteNotice") {
+    requireManager(claims);
+    const noticeId = String(payload.noticeId ?? "");
+    if (!isSupabaseConfigured()) {
+      const state = memory();
+      state.notices = state.notices.filter((item) => item.id !== noticeId);
+    } else {
+      const supabase = getSupabaseAdmin();
+      if (!supabase) rowError("Supabase não configurado.");
+      const { error } = await supabase.from("notices").delete().eq("id", noticeId);
+      if (error) rowError(error.message);
+    }
+    return getSnapshot(claims);
+  }
+
+  if (action === "addSubstitution") {
+    requireManager(claims);
+    const originalTeacher = await lookupTeacher(String(payload.originalTeacherId ?? ""));
+    const substituteTeacher = await lookupTeacher(String(payload.substituteTeacherId ?? ""));
+    const room = await lookupRoom(String(payload.roomId ?? ""));
+    const date = String(payload.date ?? today());
+    const discipline = String(payload.discipline ?? substituteTeacher.discipline);
+    const classGroup = String(payload.classGroup ?? "").trim();
+    if (!classGroup) rowError("Informe a turma da substituição.");
+
+    if (!isSupabaseConfigured()) {
+      memory().substitutions.unshift({
+        id: newId("substitution"),
+        date,
+        originalTeacherId: originalTeacher.id,
+        originalTeacherName: originalTeacher.fullName,
+        substituteTeacherId: substituteTeacher.id,
+        substituteTeacherName: substituteTeacher.fullName,
+        discipline,
+        classGroup,
+        roomId: room.id,
+        roomName: room.name,
+        createdAt: nowIso(),
+      });
+    } else {
+      const supabase = getSupabaseAdmin();
+      if (!supabase) rowError("Supabase não configurado.");
+      const { error } = await supabase.from("substitutions").insert({
+        date,
+        original_teacher_id: originalTeacher.id,
+        original_teacher_name: originalTeacher.fullName,
+        substitute_teacher_id: substituteTeacher.id,
+        substitute_teacher_name: substituteTeacher.fullName,
+        discipline,
+        class_group: classGroup,
+        room_id: room.id,
+        room_name: room.name,
+      });
+      if (error) rowError(error.message);
+    }
+    return getSnapshot(claims);
+  }
+
+  if (action === "addSchedule") {
+    requireManager(claims);
+    const teacher = await lookupTeacher(String(payload.teacherId ?? ""));
+    const room = await lookupRoom(String(payload.roomId ?? ""));
+    const classGroup = String(payload.classGroup ?? "").trim();
+    const periodLabel = String(payload.periodLabel ?? "").trim();
+    const startTime = String(payload.startTime ?? "");
+    const endTime = String(payload.endTime ?? "");
+    const weekday = Number(payload.weekday ?? 1);
+    if (!classGroup || !periodLabel || !startTime || !endTime) {
+      rowError("Preencha todos os dados do horário.");
+    }
+
+    if (!isSupabaseConfigured()) {
+      memory().schedules.push({
+        id: newId("schedule"),
+        teacherId: teacher.id,
+        teacherName: teacher.fullName,
+        discipline: teacher.discipline,
+        classGroup,
+        roomId: room.id,
+        roomName: room.name,
+        weekday,
+        periodLabel,
+        startTime,
+        endTime,
+      });
+    } else {
+      const supabase = getSupabaseAdmin();
+      if (!supabase) rowError("Supabase não configurado.");
+      const { error } = await supabase.from("schedules").insert({
+        teacher_id: teacher.id,
+        teacher_name: teacher.fullName,
+        discipline: teacher.discipline,
+        class_group: classGroup,
+        room_id: room.id,
+        room_name: room.name,
+        weekday,
+        period_label: periodLabel,
+        start_time: startTime,
+        end_time: endTime,
+      });
+      if (error) rowError(error.message);
+    }
+    return getSnapshot(claims);
+  }
+
+  if (action === "occupyRoom") {
+    if (claims.role !== "teacher" || !claims.teacherId) rowError("Apenas professores podem ocupar sala.");
+    const room = await lookupRoom(String(payload.roomId ?? ""));
+    const classGroup = String(payload.classGroup ?? "").trim();
+    const period = String(payload.period ?? "").trim();
+
+    if (!isSupabaseConfigured()) {
+      const state = memory();
+      const target = findMemoryRoom(state, room.id);
+      target.status = "occupied";
+      target.currentTeacherId = claims.teacherId;
+      target.currentTeacherName = claims.name;
+      target.currentClass = classGroup || null;
+      target.currentPeriod = period || null;
+      target.updatedAt = nowIso();
+    } else {
+      const supabase = getSupabaseAdmin();
+      if (!supabase) rowError("Supabase não configurado.");
+      const { error } = await supabase
+        .from("rooms")
+        .update({
+          status: "occupied",
+          current_teacher_id: claims.teacherId,
+          current_teacher_name: claims.name,
+          current_class: classGroup || null,
+          current_period: period || null,
+          updated_at: nowIso(),
+        })
+        .eq("id", room.id);
+      if (error) rowError(error.message);
+    }
+    return getSnapshot(claims);
+  }
+
+  if (action === "releaseRoom") {
+    if (claims.role !== "teacher" || !claims.teacherId) rowError("Apenas professores podem liberar sala.");
+    const room = await lookupRoom(String(payload.roomId ?? ""));
+
+    if (!isSupabaseConfigured()) {
+      const target = findMemoryRoom(memory(), room.id);
+      if (target.currentTeacherId !== claims.teacherId) rowError("Você não está ocupando esta sala.");
+      target.status = "free";
+      target.currentTeacherId = null;
+      target.currentTeacherName = null;
+      target.currentClass = null;
+      target.currentPeriod = null;
+      target.updatedAt = nowIso();
+    } else {
+      const supabase = getSupabaseAdmin();
+      if (!supabase) rowError("Supabase não configurado.");
+      const { error } = await supabase
+        .from("rooms")
+        .update({
+          status: "free",
+          current_teacher_id: null,
+          current_teacher_name: null,
+          current_class: null,
+          current_period: null,
+          updated_at: nowIso(),
+        })
+        .eq("id", room.id)
+        .eq("current_teacher_id", claims.teacherId);
+      if (error) rowError(error.message);
+    }
+    return getSnapshot(claims);
+  }
+
+  if (action === "addReservation") {
+    if (claims.role !== "teacher" || !claims.teacherId) rowError("Apenas professores podem reservar sala.");
+    const room = await lookupRoom(String(payload.roomId ?? ""));
+    const date = String(payload.date ?? today());
+    const startTime = String(payload.startTime ?? "");
+    const endTime = String(payload.endTime ?? "");
+    const reason = String(payload.reason ?? "").trim() || null;
+    if (!date || !startTime || !endTime) rowError("Preencha data e horário da reserva.");
+
+    if (!isSupabaseConfigured()) {
+      const state = memory();
+      state.reservations.unshift({
+        id: newId("reservation"),
+        teacherId: claims.teacherId,
+        teacherName: claims.name,
+        roomId: room.id,
+        roomName: room.name,
+        date,
+        startTime,
+        endTime,
+        reason,
+        status: "approved",
+        createdAt: nowIso(),
+      });
+      const target = findMemoryRoom(state, room.id);
+      target.status = "reserved";
+      target.currentTeacherId = claims.teacherId;
+      target.currentTeacherName = claims.name;
+      target.currentClass = reason;
+      target.currentPeriod = `${startTime}-${endTime}`;
+      target.updatedAt = nowIso();
+    } else {
+      const supabase = getSupabaseAdmin();
+      if (!supabase) rowError("Supabase não configurado.");
+      const { error: reservationError } = await supabase.from("reservations").insert({
+        teacher_id: claims.teacherId,
+        teacher_name: claims.name,
+        room_id: room.id,
+        room_name: room.name,
+        date,
+        start_time: startTime,
+        end_time: endTime,
+        reason,
+        status: "approved",
+      });
+      if (reservationError) rowError(reservationError.message);
+      const { error: roomError } = await supabase
+        .from("rooms")
+        .update({
+          status: "reserved",
+          current_teacher_id: claims.teacherId,
+          current_teacher_name: claims.name,
+          current_class: reason,
+          current_period: `${startTime}-${endTime}`,
+          updated_at: nowIso(),
+        })
+        .eq("id", room.id);
+      if (roomError) rowError(roomError.message);
+    }
+    return getSnapshot(claims);
+  }
+
+  if (action === "updateAvatar") {
+    if (claims.role !== "teacher" || !claims.teacherId) rowError("Apenas professores podem alterar foto.");
+    const avatarUrl = String(payload.avatarUrl ?? "");
+
+    if (!isSupabaseConfigured()) {
+      const teacher = findMemoryTeacher(memory(), claims.teacherId);
+      teacher.avatarUrl = avatarUrl;
+    } else {
+      const supabase = getSupabaseAdmin();
+      if (!supabase) rowError("Supabase não configurado.");
+      const { error } = await supabase
+        .from("teachers")
+        .update({ avatar_url: avatarUrl })
+        .eq("id", claims.teacherId);
+      if (error) rowError(error.message);
+    }
+    return getSnapshot(claims);
+  }
+
+  rowError("Ação não reconhecida.");
+}
