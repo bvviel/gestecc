@@ -4,7 +4,7 @@
 
 :root {
   --background: #f5f6f8;
-  --foreground: #17102b;
+  --foreground: #062016;
 }
 
 @theme inline {
@@ -15,7 +15,7 @@
 }
 
 .dark {
-  --background: #080411;
+  --background: #020806;
   --foreground: #f8fafc;
 }
 
@@ -40,7 +40,7 @@ textarea {
 }
 
 ::selection {
-  background: #e95635;
+  background: #36c486;
   color: white;
 }
 

@@ -33,6 +33,14 @@ function today() {
   return new Date().toISOString().slice(0, 10);
 }
 
+function dateLabelForNotification(date: string) {
+  return new Intl.DateTimeFormat("pt-BR", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+  }).format(new Date(`${date}T00:00:00`));
+}
+
 function weekdaysLabel(weekday: number) {
   return ["Domingo", "segunda-feira", "terça-feira", "quarta-feira", "quinta-feira", "sexta-feira", "sábado"][weekday] ?? "dia útil";
 }
@@ -734,6 +742,19 @@ async function lookupSchedule(scheduleId: string) {
   return mapSchedule(data as Record<string, unknown>);
 }
 
+function findMemoryReservation(state: MemoryState, reservationId: string) {
+  return state.reservations.find((item) => item.id === reservationId) ?? rowError("Reserva não encontrada.");
+}
+
+async function lookupReservation(reservationId: string) {
+  if (!isSupabaseConfigured()) return findMemoryReservation(memory(), reservationId);
+  const supabase = getSupabaseAdmin();
+  if (!supabase) rowError("Supabase não configurado.");
+  const { data, error } = await supabase.from("reservations").select("*").eq("id", reservationId).single();
+  if (error) rowError(error.message);
+  return mapReservation(data as Record<string, unknown>);
+}
+
 function validateSchedulePayload(payload: ActionPayload, fallbackDiscipline: string) {
   const classGroup = String(payload.classGroup ?? "").trim();
   const periodLabel = String(payload.periodLabel ?? "").trim();
@@ -777,6 +798,40 @@ async function addTeacherNotification(
   const { error } = await supabase.from("notifications").insert({
     target_role: "teacher",
     teacher_id: teacherId,
+    title,
+    body,
+    kind,
+    payload,
+  });
+  if (error) rowError(error.message);
+}
+
+async function addManagerNotification(
+  title: string,
+  body: string,
+  kind: string,
+  payload: Record<string, unknown> | null = null,
+) {
+  if (!isSupabaseConfigured()) {
+    memory().notifications.unshift({
+      id: newId("notification"),
+      targetRole: "manager",
+      teacherId: null,
+      title,
+      body,
+      kind,
+      readAt: null,
+      payload,
+      createdAt: nowIso(),
+    });
+    return;
+  }
+
+  const supabase = getSupabaseAdmin();
+  if (!supabase) rowError("Supabase não configurado.");
+  const { error } = await supabase.from("notifications").insert({
+    target_role: "manager",
+    teacher_id: null,
     title,
     body,
     kind,
@@ -1061,6 +1116,30 @@ export async function performAction(
     return getSnapshot(claims);
   }
 
+  if (action === "markNotificationsRead") {
+    if (!isSupabaseConfigured()) {
+      const state = memory();
+      for (const notification of state.notifications) {
+        const canRead =
+          claims.role === "manager"
+            ? notification.targetRole === "manager"
+            : notification.teacherId === claims.teacherId;
+        if (canRead && !notification.readAt) notification.readAt = nowIso();
+      }
+    } else {
+      const supabase = getSupabaseAdmin();
+      if (!supabase) rowError("Supabase não configurado.");
+      const stamp = nowIso();
+      let query = supabase.from("notifications").update({ read_at: stamp }).is("read_at", null);
+      query = claims.role === "manager"
+        ? query.eq("target_role", "manager")
+        : query.eq("teacher_id", claims.teacherId ?? "");
+      const { error } = await query;
+      if (error) rowError(error.message);
+    }
+    return getSnapshot(claims);
+  }
+
   if (action === "occupyRoom") {
     if (claims.role !== "teacher" || !claims.teacherId) rowError("Apenas professores podem ocupar sala.");
     const room = await lookupRoom(String(payload.roomId ?? ""));
@@ -1139,8 +1218,9 @@ export async function performAction(
 
     if (!isSupabaseConfigured()) {
       const state = memory();
+      const reservationId = newId("reservation");
       state.reservations.unshift({
-        id: newId("reservation"),
+        id: reservationId,
         teacherId: claims.teacherId,
         teacherName: claims.name,
         roomId: room.id,
@@ -1149,44 +1229,118 @@ export async function performAction(
         startTime,
         endTime,
         reason,
-        status: "approved",
+        status: "pending",
         createdAt: nowIso(),
       });
-      const target = findMemoryRoom(state, room.id);
-      target.status = "reserved";
-      target.currentTeacherId = claims.teacherId;
-      target.currentTeacherName = claims.name;
-      target.currentClass = reason;
-      target.currentPeriod = `${startTime}-${endTime}`;
-      target.updatedAt = nowIso();
+      await addManagerNotification(
+        "Nova reserva pendente",
+        `${claims.name} solicitou ${room.name} em ${dateLabelForNotification(date)}, das ${startTime} às ${endTime}.`,
+        "reservation_pending",
+        { reservationId },
+      );
     } else {
       const supabase = getSupabaseAdmin();
       if (!supabase) rowError("Supabase não configurado.");
-      const { error: reservationError } = await supabase.from("reservations").insert({
-        teacher_id: claims.teacherId,
-        teacher_name: claims.name,
-        room_id: room.id,
-        room_name: room.name,
-        date,
-        start_time: startTime,
-        end_time: endTime,
-        reason,
-        status: "approved",
-      });
-      if (reservationError) rowError(reservationError.message);
-      const { error: roomError } = await supabase
-        .from("rooms")
-        .update({
-          status: "reserved",
-          current_teacher_id: claims.teacherId,
-          current_teacher_name: claims.name,
-          current_class: reason,
-          current_period: `${startTime}-${endTime}`,
-          updated_at: nowIso(),
+      const { data, error: reservationError } = await supabase
+        .from("reservations")
+        .insert({
+          teacher_id: claims.teacherId,
+          teacher_name: claims.name,
+          room_id: room.id,
+          room_name: room.name,
+          date,
+          start_time: startTime,
+          end_time: endTime,
+          reason,
+          status: "pending",
         })
-        .eq("id", room.id);
-      if (roomError) rowError(roomError.message);
+        .select("id")
+        .single();
+      if (reservationError) rowError(reservationError.message);
+      const reservationId = String((data as Record<string, unknown>).id);
+      await addManagerNotification(
+        "Nova reserva pendente",
+        `${claims.name} solicitou ${room.name} em ${dateLabelForNotification(date)}, das ${startTime} às ${endTime}.`,
+        "reservation_pending",
+        { reservationId },
+      );
     }
+    return getSnapshot(claims);
+  }
+
+  if (action === "approveReservation") {
+    requireManager(claims);
+    const reservationId = String(payload.reservationId ?? "");
+    const reservation = await lookupReservation(reservationId);
+
+    if (!isSupabaseConfigured()) {
+      const state = memory();
+      const target = findMemoryReservation(state, reservationId);
+      target.status = "approved";
+      if (target.roomId) {
+        const room = findMemoryRoom(state, target.roomId);
+        room.status = "reserved";
+        room.currentTeacherId = target.teacherId;
+        room.currentTeacherName = target.teacherName;
+        room.currentClass = target.reason;
+        room.currentPeriod = `${target.startTime}-${target.endTime}`;
+        room.updatedAt = nowIso();
+      }
+    } else {
+      const supabase = getSupabaseAdmin();
+      if (!supabase) rowError("Supabase não configurado.");
+      const { error: reservationError } = await supabase
+        .from("reservations")
+        .update({ status: "approved" })
+        .eq("id", reservationId);
+      if (reservationError) rowError(reservationError.message);
+      if (reservation.roomId) {
+        const { error: roomError } = await supabase
+          .from("rooms")
+          .update({
+            status: "reserved",
+            current_teacher_id: reservation.teacherId,
+            current_teacher_name: reservation.teacherName,
+            current_class: reservation.reason,
+            current_period: `${reservation.startTime}-${reservation.endTime}`,
+            updated_at: nowIso(),
+          })
+          .eq("id", reservation.roomId);
+        if (roomError) rowError(roomError.message);
+      }
+    }
+
+    await addTeacherNotification(
+      reservation.teacherId,
+      "Reserva aprovada",
+      `${reservation.roomName} foi aprovada para ${dateLabelForNotification(reservation.date)}, das ${reservation.startTime} às ${reservation.endTime}.`,
+      "reservation_approved",
+      { reservationId },
+    );
+    return getSnapshot(claims);
+  }
+
+  if (action === "rejectReservation") {
+    requireManager(claims);
+    const reservationId = String(payload.reservationId ?? "");
+    const reservation = await lookupReservation(reservationId);
+
+    if (!isSupabaseConfigured()) {
+      findMemoryReservation(memory(), reservationId).status = "rejected";
+    } else {
+      const supabase = getSupabaseAdmin();
+      if (!supabase) rowError("Supabase não configurado.");
+      const { error } = await supabase.from("reservations").update({ status: "rejected" }).eq("id", reservationId);
+      if (error) rowError(error.message);
+    }
+
+    await addTeacherNotification(
+      reservation.teacherId,
+      "Reserva recusada",
+      `${reservation.roomName} não foi aprovada para ${dateLabelForNotification(reservation.date)}, das ${reservation.startTime} às ${reservation.endTime}.`,
+      "reservation_rejected",
+      { reservationId },
+    );
     return getSnapshot(claims);
   }
 

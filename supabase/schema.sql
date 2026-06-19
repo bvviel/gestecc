@@ -91,7 +91,7 @@ create table if not exists public.reservations (
   start_time time not null,
   end_time time not null,
   reason text,
-  status text not null default 'approved' check (status in ('pending', 'approved', 'rejected')),
+  status text not null default 'pending' check (status in ('pending', 'approved', 'rejected')),
   created_at timestamptz not null default now()
 );
 
