@@ -43,24 +43,41 @@ type ApiResponse<T> = { ok: true; data: T } | { ok: false; message: string };
 const today = () => new Date().toISOString().slice(0, 10);
 const workWeek = [
   { value: 1, label: "Segunda" },
-  { value: 2, label: "TerÃ§a" },
+  { value: 2, label: "Terça" },
   { value: 3, label: "Quarta" },
   { value: 4, label: "Quinta" },
   { value: 5, label: "Sexta" },
 ];
 const periodOptions = [
-  { label: "1Âº perÃ­odo", start: "07:30", end: "08:20" },
-  { label: "2Âº perÃ­odo", start: "08:20", end: "09:10" },
-  { label: "3Âº perÃ­odo", start: "09:10", end: "10:00" },
-  { label: "4Âº perÃ­odo", start: "10:15", end: "11:05" },
-  { label: "5Âº perÃ­odo", start: "11:05", end: "11:55" },
-  { label: "6Âº perÃ­odo", start: "11:55", end: "12:45" },
-  { label: "7Âº perÃ­odo", start: "12:45", end: "13:35" },
+  { label: "1º período", start: "07:30", end: "08:20" },
+  { label: "2º período", start: "08:20", end: "09:10" },
+  { label: "3º período", start: "09:10", end: "10:00" },
+  { label: "4º período", start: "10:15", end: "11:05" },
+  { label: "5º período", start: "11:05", end: "11:55" },
+  { label: "6º período", start: "11:55", end: "12:45" },
+  { label: "7º período", start: "12:45", end: "13:35" },
 ].map((period) => ({
   ...period,
   value: `${period.label}|${period.start}|${period.end}`,
 }));
 const schoolBreak = { label: "Intervalo", start: "10:00", end: "10:15" };
+const defaultClassGroups = [
+  "1º DS",
+  "2º DS",
+  "3º DS",
+  "1º Administração",
+  "2º Administração",
+  "3º Administração",
+  "1º Marketing",
+  "2º Marketing",
+  "3º Marketing",
+  "1º Informática",
+  "2º Informática",
+  "3º Informática",
+  "1º Química",
+  "2º Química",
+  "3º Química",
+];
 
 const emptyData: AppSnapshot = {
   configured: false,
@@ -116,16 +133,22 @@ function initials(name: string) {
 }
 
 function contractTypeLabel(value: "permanent" | "temporary") {
-  return value === "permanent" ? "Concursado" : "NÃ£o concursado";
+  return value === "permanent" ? "Concursado" : "Não concursado";
 }
 
 function periodValue(schedule: Pick<Schedule, "periodLabel" | "startTime" | "endTime">) {
+  const canonical = periodOptions.find((period) => period.start === schedule.startTime && period.end === schedule.endTime);
+  if (canonical) return canonical.value;
   return `${schedule.periodLabel}|${schedule.startTime}|${schedule.endTime}`;
 }
 
 function periodFromValue(value: string) {
   const [label = periodOptions[0].label, start = periodOptions[0].start, end = periodOptions[0].end] = value.split("|");
   return { label, start, end };
+}
+
+function samePeriod(schedule: Pick<Schedule, "periodLabel" | "startTime" | "endTime">, period: typeof periodOptions[number]) {
+  return schedule.periodLabel === period.label || (schedule.startTime === period.start && schedule.endTime === period.end);
 }
 
 function getFormString(form: HTMLFormElement, name: string) {
@@ -438,7 +461,7 @@ export function GesteccApp() {
     const password = getFormString(form, "password");
     const confirmPassword = getFormString(form, "confirmPassword");
     if (password !== confirmPassword) {
-      setMessage("As senhas nÃ£o conferem.");
+      setMessage("As senhas não conferem.");
       return;
     }
 
@@ -645,7 +668,7 @@ export function GesteccApp() {
                     </p>
                   </div>
                   <TextInput label="E-mail institucional" name="email" type="email" placeholder="seu@escola.edu.br" required />
-                  <PasswordInput label="Senha" name="password" placeholder="â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢" />
+                  <PasswordInput label="Senha" name="password" placeholder="••••••••" />
                   <Button type="submit" className="h-14 rounded-xl text-base" disabled={loading}>
                     Entrar como Professor
                   </Button>
@@ -657,7 +680,7 @@ export function GesteccApp() {
                       setMessage(null);
                     }}
                   >
-                    NÃ£o tem conta? <span className="text-[#36c486]">Cadastrar-se</span>
+                    Não tem conta? <span className="text-[#36c486]">Cadastrar-se</span>
                   </button>
                 </form>
               )}
@@ -668,13 +691,13 @@ export function GesteccApp() {
                     <Shield size={18} /> Gestor
                   </span>
                   <div>
-                    <h2 className="text-4xl font-black">Acesso da GestÃ£o</h2>
+                    <h2 className="text-4xl font-black">Acesso da Gestão</h2>
                     <p className="mt-2 text-lg text-zinc-500 dark:text-zinc-400">
-                      Login administrativo Ãºnico
+                      Login administrativo único
                     </p>
                   </div>
-                  <TextInput label="UsuÃ¡rio" name="username" placeholder="UsuÃ¡rio administrativo" required />
-                  <PasswordInput label="Senha" name="password" placeholder="â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢" />
+                  <TextInput label="Usuário" name="username" placeholder="Usuário administrativo" required />
+                  <PasswordInput label="Senha" name="password" placeholder="••••••••" />
                   <Button type="submit" className="h-14 rounded-xl text-base" disabled={loading}>
                     Acessar como Gestor
                   </Button>
@@ -701,15 +724,15 @@ export function GesteccApp() {
                       <option key={discipline}>{discipline}</option>
                     ))}
                   </SelectInput>
-                  <SelectInput label="Tipo de vÃ­nculo" name="contractType" defaultValue="" required>
+                  <SelectInput label="Tipo de vínculo" name="contractType" defaultValue="" required>
                     <option value="" disabled>
-                      Selecione o vÃ­nculo
+                      Selecione o vínculo
                     </option>
                     <option value="permanent">Concursado</option>
-                    <option value="temporary">NÃ£o concursado</option>
+                    <option value="temporary">Não concursado</option>
                   </SelectInput>
                   <TextInput label="E-mail institucional" name="email" type="email" placeholder="seu@escola.edu.br" required />
-                  <PasswordInput label="Senha" name="password" placeholder="MÃ­nimo 6 caracteres" />
+                  <PasswordInput label="Senha" name="password" placeholder="Mínimo 6 caracteres" />
                   <PasswordInput label="Confirmar senha" name="confirmPassword" placeholder="Repita a senha" />
                   <Button type="submit" className="h-14 rounded-xl text-base" disabled={loading}>
                     Solicitar Cadastro
@@ -719,7 +742,7 @@ export function GesteccApp() {
                     className="text-center text-sm font-semibold text-zinc-500 dark:text-zinc-400"
                     onClick={() => setAuthView("teacher")}
                   >
-                    JÃ¡ tem conta? <span className="text-[#36c486]">Fazer login</span>
+                    Já tem conta? <span className="text-[#36c486]">Fazer login</span>
                   </button>
                 </form>
               )}
@@ -745,7 +768,7 @@ export function GesteccApp() {
           <div className="flex items-center gap-3">
             <Logo compact />
             <div className="hidden sm:block">
-              <div className="text-sm font-black">OlÃ¡, {session.name.split(" ")[0]}</div>
+              <div className="text-sm font-black">Olá, {session.name.split(" ")[0]}</div>
               <div className="text-xs text-zinc-500 dark:text-zinc-400">{fullDateLabel()}</div>
             </div>
           </div>
@@ -776,7 +799,7 @@ export function GesteccApp() {
                 )}
               >
                 <Shield size={16} />
-                <span className="hidden md:inline">GestÃ£o</span>
+                <span className="hidden md:inline">Gestão</span>
               </button>
             )}
             {session.role === "teacher" && (
@@ -806,7 +829,7 @@ export function GesteccApp() {
                   unreadNotifications > 0 && !notificationsOpen && "animate-pulse",
                 )}
                 onClick={() => setNotificationsOpen((value) => !value)}
-                aria-label="NotificaÃ§Ãµes"
+                aria-label="Notificações"
               >
                 <Bell size={18} />
                 {unreadNotifications > 0 && (
@@ -819,8 +842,8 @@ export function GesteccApp() {
                 <div className="absolute right-0 mt-2 w-80 overflow-hidden rounded-2xl border border-zinc-200 bg-white shadow-2xl shadow-emerald-950/10 dark:border-white/10 dark:bg-[#07120d] dark:shadow-black/40">
                   <div className="flex items-center justify-between gap-3 border-b border-zinc-100 px-4 py-3 dark:border-white/10">
                     <div>
-                      <div className="font-black">NotificaÃ§Ãµes</div>
-                      <div className="text-xs text-zinc-400">{unreadNotifications} nÃ£o lida(s)</div>
+                      <div className="font-black">Notificações</div>
+                      <div className="text-xs text-zinc-400">{unreadNotifications} não lida(s)</div>
                     </div>
                     {data.notifications.length > 0 && (
                       <button
@@ -834,11 +857,15 @@ export function GesteccApp() {
                   </div>
                   <div className="max-h-96 overflow-auto p-2">
                     {data.notifications.length === 0 && (
-                      <div className="p-5 text-center text-sm text-zinc-500">Nenhuma notificaÃ§Ã£o</div>
+                      <div className="p-5 text-center text-sm text-zinc-500">Nenhuma notificação</div>
                     )}
                     {data.notifications.map((notification) => {
                       const requestId = String(notification.payload?.requestId ?? "");
                       const reservationId = String(notification.payload?.reservationId ?? "");
+                      const signupRequest = requestId
+                        ? data.requests.find((request) => request.id === requestId) ?? null
+                        : null;
+                      const canReviewRequest = signupRequest?.status === "pending";
                       return (
                         <div
                           key={notification.id}
@@ -859,10 +886,36 @@ export function GesteccApp() {
                             {!notification.readAt && <span className="h-2 w-2 rounded-full bg-[#36c486]" />}
                           </div>
                           <div className="mt-1 text-xs leading-5 text-zinc-500 dark:text-zinc-400">{notification.body}</div>
+                          {signupRequest && (
+                            <dl className="mt-3 grid gap-1.5 rounded-xl bg-white/70 p-3 text-[11px] dark:bg-white/5">
+                              {[
+                                ["Nome", signupRequest.fullName],
+                                ["E-mail", signupRequest.email],
+                                ["Disciplina", signupRequest.discipline],
+                                ["Vínculo", contractTypeLabel(signupRequest.contractType)],
+                                ["Enviado em", dateTimeLabel(signupRequest.createdAt)],
+                              ].map(([label, value]) => (
+                                <div key={label} className="flex justify-between gap-3">
+                                  <dt className="text-zinc-400">{label}</dt>
+                                  <dd className="text-right font-bold text-zinc-700 dark:text-zinc-200">{value}</dd>
+                                </div>
+                              ))}
+                            </dl>
+                          )}
                           <div className="mt-2 text-[11px] text-zinc-400">
-                            {dateTimeLabel(notification.createdAt)} Â· {notification.readAt ? "Lida" : "NÃ£o lida"}
+                            {dateTimeLabel(notification.createdAt)} · {notification.readAt ? "Lida" : "Não lida"}
                           </div>
-                          {session.role === "manager" && requestId && (
+                          {session.role === "manager" && requestId && !signupRequest && (
+                            <div className="mt-3 rounded-xl bg-zinc-100 px-3 py-2 text-xs font-semibold text-zinc-500 dark:bg-white/5 dark:text-zinc-400">
+                              Solicitação já resolvida ou removida.
+                            </div>
+                          )}
+                          {session.role === "manager" && requestId && signupRequest && !canReviewRequest && (
+                            <div className="mt-3 rounded-xl bg-zinc-100 px-3 py-2 text-xs font-semibold text-zinc-500 dark:bg-white/5 dark:text-zinc-400">
+                              Solicitação {signupRequest.status === "approved" ? "aprovada" : "recusada"}.
+                            </div>
+                          )}
+                          {session.role === "manager" && requestId && canReviewRequest && (
                             <div className="mt-3 flex gap-2">
                               <Button
                                 className="h-8 px-3 text-xs"
@@ -960,7 +1013,7 @@ export function GesteccApp() {
 
         {data.mode === "memory" && (
           <div className="mb-5 rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-xs font-semibold text-emerald-800 dark:border-emerald-900/70 dark:bg-emerald-950/30 dark:text-emerald-200">
-            Modo local: conecte as variÃ¡veis do Supabase para persistÃªncia online.
+            Modo local: conecte as variáveis do Supabase para persistência online.
           </div>
         )}
 
@@ -971,13 +1024,13 @@ export function GesteccApp() {
         {page === "manager" && session.role === "manager" && (
           <section className="grid gap-6">
             <div>
-              <h1 className="text-3xl font-black">Painel da GestÃ£o</h1>
+              <h1 className="text-3xl font-black">Painel da Gestão</h1>
               <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">{fullDateLabel()}</p>
             </div>
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
               <StatCard icon={<Users size={17} />} label="Professores ativos" value={metrics.activeTeachers} tone="bg-emerald-50 text-emerald-600 dark:bg-emerald-500/10" />
               <StatCard icon={<CheckCircle2 size={17} />} label="Concursados" value={metrics.permanentTeachers} tone="bg-teal-50 text-teal-600 dark:bg-teal-500/10" />
-              <StatCard icon={<FileText size={17} />} label="NÃ£o concursados" value={metrics.temporaryTeachers} tone="bg-amber-50 text-amber-600 dark:bg-amber-500/10" />
+              <StatCard icon={<FileText size={17} />} label="Não concursados" value={metrics.temporaryTeachers} tone="bg-amber-50 text-amber-600 dark:bg-amber-500/10" />
               <StatCard icon={<ClipboardList size={17} />} label="Reservas pendentes" value={metrics.pendingReservations} tone="bg-rose-50 text-rose-600 dark:bg-rose-500/10" />
             </div>
 
@@ -985,8 +1038,8 @@ export function GesteccApp() {
               {[
                 ["people", "Pessoas", Users],
                 ["permanent", "Concursados", CheckCircle2],
-                ["temporary", "NÃ£o concursados", FileText],
-                ["schedules", "HorÃ¡rios", Calendar],
+                ["temporary", "Não concursados", FileText],
+                ["schedules", "Horários", Calendar],
                 ["reservations", "Reservas", ClipboardList],
                 ["notices", "Avisos", Bell],
               ].map(([key, label, Icon]) => (
@@ -1020,14 +1073,14 @@ export function GesteccApp() {
               <ContractsTable
                 teachers={data.teachers.filter((teacher) => teacher.contractType === "permanent")}
                 title="Professores concursados"
-                subtitle="VÃ­nculos sem prazo de tÃ©rmino."
+                subtitle="Vínculos sem prazo de término."
               />
             )}
             {managerTab === "temporary" && (
               <ContractsTable
                 teachers={data.teachers.filter((teacher) => teacher.contractType === "temporary")}
-                title="Professores nÃ£o concursados"
-                subtitle="Contratos temporÃ¡rios com previsÃ£o de 2 anos."
+                title="Professores não concursados"
+                subtitle="Contratos temporários com previsão de 2 anos."
               />
             )}
             {managerTab === "schedules" && (
@@ -1061,13 +1114,13 @@ export function GesteccApp() {
         {page === "teacher" && session.role === "teacher" && (
           <section className="grid gap-6">
             <div>
-              <h1 className="text-3xl font-black">OlÃ¡, {session.name.split(" ")[0]}</h1>
+              <h1 className="text-3xl font-black">Olá, {session.name.split(" ")[0]}</h1>
               <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">{fullDateLabel()}</p>
             </div>
             <div className="flex flex-wrap gap-2 rounded-xl bg-zinc-100 p-2 dark:bg-white/5">
               {[
-                ["overview", "VisÃ£o Geral", BookOpen],
-                ["schedules", "HorÃ¡rios", Calendar],
+                ["overview", "Visão Geral", BookOpen],
+                ["schedules", "Horários", Calendar],
                 ["reservations", "Reservas", ClipboardList],
                 ["profile", "Perfil", User],
               ].map(([key, label, Icon]) => (
@@ -1141,14 +1194,14 @@ function GeneralDashboard({
   const todayScheduleRows = todaySchedules.map((schedule) =>
     role === "manager"
       ? [
-          `${schedule.periodLabel} Â· ${schedule.startTime}-${schedule.endTime}`,
+          `${schedule.periodLabel} · ${schedule.startTime}-${schedule.endTime}`,
           schedule.discipline,
           schedule.teacherName,
           schedule.classGroup,
           schedule.roomName,
         ]
       : [
-          `${schedule.periodLabel} Â· ${schedule.startTime}-${schedule.endTime}`,
+          `${schedule.periodLabel} · ${schedule.startTime}-${schedule.endTime}`,
           schedule.discipline,
           schedule.classGroup,
           schedule.roomName,
@@ -1162,12 +1215,12 @@ function GeneralDashboard({
           <h1 className="text-3xl font-black">Painel Geral</h1>
           <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">{fullDateLabel()}</p>
         </div>
-        <div className="text-xs text-zinc-400">Atualizado Ã s {new Date(data.now).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}</div>
+        <div className="text-xs text-zinc-400">Atualizado às {new Date(data.now).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}</div>
       </div>
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <StatCard icon={<Calendar size={17} />} label="Aulas hoje" value={metrics.todaysSchedules} tone="bg-emerald-50 text-emerald-600 dark:bg-emerald-500/10" />
         <StatCard icon={<DoorOpen size={17} />} label={role === "teacher" ? "Salas para hoje" : "Salas com aula hoje"} value={new Set(todaySchedules.map((schedule) => schedule.roomName)).size} tone="bg-rose-50 text-rose-600 dark:bg-rose-500/10" />
-        <StatCard icon={<ClipboardList size={17} />} label="SubstituiÃ§Ãµes hoje" value={metrics.substitutions} tone="bg-amber-50 text-amber-600 dark:bg-amber-500/10" />
+        <StatCard icon={<ClipboardList size={17} />} label="Substituições hoje" value={metrics.substitutions} tone="bg-amber-50 text-amber-600 dark:bg-amber-500/10" />
         <StatCard icon={<Bell size={17} />} label="Avisos ativos" value={metrics.notices} tone="bg-emerald-50 text-emerald-600 dark:bg-emerald-500/10" />
       </div>
 
@@ -1194,7 +1247,7 @@ function GeneralDashboard({
                   </span>
                 </div>
                 <p className="mt-2 text-sm leading-6 text-zinc-600 dark:text-zinc-300">{notice.body}</p>
-                <p className="mt-3 text-xs text-zinc-400">VÃ¡lido desde {dateTimeLabel(notice.createdAt)}</p>
+                <p className="mt-3 text-xs text-zinc-400">Válido desde {dateTimeLabel(notice.createdAt)}</p>
               </article>
             ))}
             {data.notices.length === 0 && <EmptyState icon={<Bell size={26} />} title="Nenhum aviso publicado" />}
@@ -1202,7 +1255,7 @@ function GeneralDashboard({
         </section>
 
         <section className="rounded-xl border border-zinc-200 bg-white p-4 shadow-sm dark:border-white/10 dark:bg-white/[0.04]">
-          <h2 className="mb-4 text-base font-black">SubstituiÃ§Ãµes de Hoje</h2>
+          <h2 className="mb-4 text-base font-black">Substituições de Hoje</h2>
           <ResponsiveTable
             headers={["Data", "Original", "Substituto", "Disciplina", "Turma", "Sala"]}
             rows={data.substitutions.map((item) => [
@@ -1213,7 +1266,7 @@ function GeneralDashboard({
               item.classGroup,
               item.roomName,
             ])}
-            empty={<EmptyState icon={<ClipboardList size={26} />} title="Nenhuma substituiÃ§Ã£o hoje" />}
+            empty={<EmptyState icon={<ClipboardList size={26} />} title="Nenhuma substituição hoje" />}
           />
         </section>
       </div>
@@ -1221,10 +1274,10 @@ function GeneralDashboard({
       <section className="rounded-xl border border-zinc-200 bg-white p-4 shadow-sm dark:border-white/10 dark:bg-white/[0.04]">
         <div className="mb-4 flex items-center gap-2">
           <span className="h-5 w-1 rounded-full bg-emerald-500" />
-          <h2 className="text-base font-black">{role === "teacher" ? "Salas que vocÃª precisa ir hoje" : "Aulas e salas de hoje"}</h2>
+          <h2 className="text-base font-black">{role === "teacher" ? "Salas que você precisa ir hoje" : "Aulas e salas de hoje"}</h2>
         </div>
         <ResponsiveTable
-          headers={role === "manager" ? ["PerÃ­odo", "Disciplina", "Professor", "Turma", "Sala"] : ["PerÃ­odo", "Disciplina", "Turma", "Sala"]}
+          headers={role === "manager" ? ["Período", "Disciplina", "Professor", "Turma", "Sala"] : ["Período", "Disciplina", "Turma", "Sala"]}
           rows={todayScheduleRows}
           empty={<EmptyState icon={<DoorOpen size={26} />} title="Nenhuma sala programada para hoje" />}
         />
@@ -1271,7 +1324,7 @@ function ResponsiveTable({
                     {headers[cellIndex]}
                   </dt>
                   <dd className="min-w-0 text-right font-semibold text-zinc-700 dark:text-zinc-200">
-                    {cell || "â€”"}
+                    {cell || "—"}
                   </dd>
                 </div>
               ))}
@@ -1295,7 +1348,7 @@ function ResponsiveTable({
               <tr key={`${row.join("-")}-${index}`} className="text-zinc-700 dark:text-zinc-200">
                 {row.map((cell, cellIndex) => (
                   <td key={`${cell}-${cellIndex}`} className="border-b border-zinc-100 px-3 py-3 dark:border-white/10">
-                    {cell || "â€”"}
+                    {cell || "—"}
                   </td>
                 ))}
               </tr>
@@ -1325,14 +1378,17 @@ function ManagerPeople({
     <div className="grid gap-5">
       {pendingRequests.length > 0 && (
         <section className="rounded-xl border border-emerald-200 bg-emerald-50 p-4 dark:border-emerald-900/70 dark:bg-emerald-950/20">
-          <h2 className="mb-3 font-black text-emerald-900 dark:text-emerald-100">SolicitaÃ§Ãµes pendentes</h2>
+          <h2 className="mb-3 font-black text-emerald-900 dark:text-emerald-100">Solicitações pendentes</h2>
           <div className="grid gap-3">
             {pendingRequests.map((request) => (
               <div key={request.id} className="flex flex-col justify-between gap-3 rounded-xl bg-white p-4 shadow-sm dark:bg-white/10 sm:flex-row sm:items-center">
                 <div>
                   <div className="font-black">{request.fullName}</div>
                   <div className="mt-1 text-sm text-zinc-500 dark:text-zinc-300">
-                    {request.discipline} Â· {contractTypeLabel(request.contractType)} Â· {request.email}
+                    {request.discipline} · {contractTypeLabel(request.contractType)} · {request.email}
+                  </div>
+                  <div className="mt-1 text-xs font-semibold text-zinc-400">
+                    Enviado em {dateTimeLabel(request.createdAt)}
                   </div>
                 </div>
                 <div className="flex gap-2">
@@ -1346,23 +1402,75 @@ function ManagerPeople({
       )}
 
       <section className="rounded-xl border border-zinc-200 bg-white p-4 shadow-sm dark:border-white/10 dark:bg-white/[0.04]">
-        <h2 className="mb-4 font-black">Todos os Professores</h2>
-        <ResponsiveTable
-          headers={["Professor", "Disciplina", "VÃ­nculo", "E-mail", "Status"]}
-          rows={data.teachers.map((teacher) => [
-            teacher.fullName,
-            teacher.discipline,
-            contractTypeLabel(teacher.contractType),
-            teacher.email,
-            teacher.contractStatus === "active" ? "Ativo" : teacher.contractStatus,
-          ])}
-          empty={<EmptyState icon={<Users size={26} />} title="Nenhum professor aprovado" />}
-        />
+        <div className="mb-4 flex items-center justify-between gap-3">
+          <div>
+            <h2 className="font-black">Todos os Professores</h2>
+            <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
+              Cadastros aprovados, disciplinas, vínculos e e-mails institucionais.
+            </p>
+          </div>
+          <span className="rounded-full bg-emerald-50 px-3 py-1.5 text-xs font-black text-[#0f8a61] dark:bg-emerald-400/10 dark:text-emerald-100">
+            {data.teachers.length} ativo(s)
+          </span>
+        </div>
+        {data.teachers.length === 0 ? (
+          <EmptyState icon={<Users size={26} />} title="Nenhum professor aprovado" />
+        ) : (
+          <div className="grid gap-3">
+            {data.teachers.map((teacher) => (
+              <article
+                key={teacher.id}
+                className="group grid gap-4 rounded-2xl border border-zinc-200 bg-zinc-50/70 p-4 transition-all duration-300 hover:-translate-y-1 hover:border-emerald-200 hover:bg-white hover:shadow-md dark:border-white/10 dark:bg-white/[0.03] dark:hover:border-emerald-400/30 dark:hover:bg-white/[0.05] md:grid-cols-[1.2fr_1fr_auto]"
+              >
+                <div className="flex min-w-0 items-center gap-3">
+                  <span className="grid h-11 w-11 shrink-0 place-items-center overflow-hidden rounded-xl bg-[#0f8a61] text-sm font-black text-white shadow-sm">
+                    {teacher.avatarUrl ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img src={teacher.avatarUrl} alt={teacher.fullName} className="h-full w-full object-cover" />
+                    ) : (
+                      initials(teacher.fullName)
+                    )}
+                  </span>
+                  <div className="min-w-0">
+                    <h3 className="truncate font-black">{teacher.fullName}</h3>
+                    <p className="truncate text-sm text-zinc-500 dark:text-zinc-400">{teacher.email}</p>
+                  </div>
+                </div>
+                <div className="grid gap-2 text-sm sm:grid-cols-2">
+                  <div>
+                    <div className="text-xs font-bold uppercase tracking-wide text-zinc-400">Disciplina</div>
+                    <div className="font-black">{teacher.discipline || "Sem disciplina"}</div>
+                  </div>
+                  <div>
+                    <div className="text-xs font-bold uppercase tracking-wide text-zinc-400">Vínculo</div>
+                    <div className="font-black">{contractTypeLabel(teacher.contractType)}</div>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2 md:justify-end">
+                  <span className="rounded-full bg-emerald-50 px-3 py-1.5 text-xs font-black text-[#0f8a61] dark:bg-emerald-400/10 dark:text-emerald-100">
+                    {teacher.contractStatus === "active" ? "Ativo" : teacher.contractStatus}
+                  </span>
+                  <button
+                    type="button"
+                    className="inline-flex h-9 items-center gap-2 rounded-lg border border-rose-100 bg-white px-3 text-xs font-black text-rose-600 shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:bg-rose-50 hover:shadow-md active:scale-95 dark:border-rose-400/20 dark:bg-white/5 dark:text-rose-200 dark:hover:bg-rose-950/30"
+                    onClick={() => {
+                      if (window.confirm(`Remover a conta de ${teacher.fullName}? Esta ação apaga também horários, reservas e notificações ligadas ao professor.`)) {
+                        void postAction("deleteTeacher", { teacherId: teacher.id });
+                      }
+                    }}
+                  >
+                    <Trash2 size={14} /> Remover
+                  </button>
+                </div>
+              </article>
+            ))}
+          </div>
+        )}
       </section>
 
       <section className="rounded-xl border border-zinc-200 bg-white p-4 shadow-sm dark:border-white/10 dark:bg-white/[0.04]">
         <div className="mb-4 flex items-center justify-between gap-4">
-          <h2 className="font-black">SubstituiÃ§Ãµes de Hoje</h2>
+          <h2 className="font-black">Substituições de Hoje</h2>
           <Button onClick={() => setSubstitutionOpen(!substitutionOpen)} className="h-9">
             <Plus size={15} /> Adicionar
           </Button>
@@ -1400,7 +1508,7 @@ function ManagerPeople({
               <option value="" disabled>Selecione</option>
               {DISCIPLINES.map((discipline) => <option key={discipline}>{discipline}</option>)}
             </SelectInput>
-            <TextInput label="Turma" name="classGroup" placeholder="Ex: 2Âº DS" required />
+            <TextInput label="Turma" name="classGroup" placeholder="Ex: 2º DS" required />
             <SelectInput label="Sala" name="roomId" defaultValue="" required>
               <option value="" disabled>Selecione</option>
               {data.rooms.map((room) => <option key={room.id} value={room.id}>{room.name}</option>)}
@@ -1422,7 +1530,7 @@ function ManagerPeople({
             item.classGroup,
             item.roomName,
           ])}
-          empty={<EmptyState icon={<ClipboardList size={26} />} title="Nenhuma substituiÃ§Ã£o registrada hoje" />}
+          empty={<EmptyState icon={<ClipboardList size={26} />} title="Nenhuma substituição registrada hoje" />}
         />
       </section>
     </div>
@@ -1447,14 +1555,14 @@ function ContractsTable({
     const remainingMonths = monthsRemaining === null ? 0 : monthsRemaining % 12;
     const remaining = monthsRemaining === null
       ? "Indeterminado"
-      : `${years > 0 ? `${years} ano${years > 1 ? "s" : ""}` : ""}${years && remainingMonths ? " e " : ""}${remainingMonths > 0 ? `${remainingMonths} mÃªs${remainingMonths > 1 ? "es" : ""}` : years ? "" : "menos de 1 mÃªs"}`;
+      : `${years > 0 ? `${years} ano${years > 1 ? "s" : ""}` : ""}${years && remainingMonths ? " e " : ""}${remainingMonths > 0 ? `${remainingMonths} mês${remainingMonths > 1 ? "es" : ""}` : years ? "" : "menos de 1 mês"}`;
     return [
       teacher.fullName,
       teacher.discipline,
       contractTypeLabel(teacher.contractType),
       dateLabel(teacher.contractStart),
       teacher.contractEnd ? dateLabel(teacher.contractEnd) : "Tempo indeterminado",
-      teacher.contractType === "temporary" ? `Contrato de 2 anos Â· ${remaining}` : "Sem prazo de tÃ©rmino",
+      teacher.contractType === "temporary" ? `Contrato de 2 anos · ${remaining}` : "Sem prazo de término",
       teacher.contractStatus === "active" ? "Ativo" : teacher.contractStatus,
     ];
   });
@@ -1466,7 +1574,7 @@ function ContractsTable({
         {subtitle && <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">{subtitle}</p>}
       </div>
       <ResponsiveTable
-        headers={["Professor", "Disciplina", "VÃ­nculo", "InÃ­cio", "Vencimento", "Tempo restante", "Status"]}
+        headers={["Professor", "Disciplina", "Vínculo", "Início", "Vencimento", "Tempo restante", "Status"]}
         rows={rows}
         empty={<EmptyState icon={<ClipboardList size={26} />} title="Nenhum contrato cadastrado" />}
       />
@@ -1594,12 +1702,24 @@ function SchedulesManager({
   const [scheduleDay, setScheduleDay] = useState(1);
   const [editingScheduleId, setEditingScheduleId] = useState<string | null>(null);
   const editingSchedule = data.schedules.find((schedule) => schedule.id === editingScheduleId) ?? null;
-  const scheduleDisciplines = Array.from(new Set(data.schedules.map((schedule) => schedule.discipline))).sort((a, b) => a.localeCompare(b));
-  const visibleSchedules = scheduleFilterDiscipline
-    ? data.schedules.filter((schedule) => schedule.discipline === scheduleFilterDiscipline)
-    : data.schedules;
-  const visibleDaySchedules = visibleSchedules.filter((schedule) => schedule.weekday === scheduleDay);
-  const classGroups = Array.from(new Set(visibleDaySchedules.map((schedule) => schedule.classGroup))).sort((a, b) => a.localeCompare(b));
+  const daySchedules = useMemo(
+    () => data.schedules.filter((schedule) => schedule.weekday === scheduleDay),
+    [data.schedules, scheduleDay],
+  );
+  const scheduleDisciplines = useMemo(
+    () => Array.from(new Set(daySchedules.map((schedule) => schedule.discipline))).sort((a, b) => a.localeCompare(b)),
+    [daySchedules],
+  );
+  const activeScheduleFilter = scheduleDisciplines.includes(scheduleFilterDiscipline) ? scheduleFilterDiscipline : "";
+  const visibleDaySchedules = activeScheduleFilter
+    ? daySchedules.filter((schedule) => schedule.discipline === activeScheduleFilter)
+    : daySchedules;
+  const classGroups = useMemo(
+    () =>
+      Array.from(new Set([...defaultClassGroups, ...data.schedules.map((schedule) => schedule.classGroup).filter(Boolean)]))
+        .sort((a, b) => a.localeCompare(b, "pt-BR", { numeric: true })),
+    [data.schedules],
+  );
   const teachersByDiscipline = selectedDiscipline
     ? data.teachers.filter((teacher) => teacher.discipline === selectedDiscipline)
     : data.teachers;
@@ -1623,6 +1743,7 @@ function SchedulesManager({
     setEditingScheduleId(schedule.id);
     setSelectedDiscipline(schedule.discipline);
     setSelectedPeriod(periodValue(schedule));
+    setScheduleDay(schedule.weekday);
     setScheduleOpen(true);
   };
 
@@ -1637,7 +1758,7 @@ function SchedulesManager({
     <section className="rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm dark:border-white/10 dark:bg-white/[0.04]">
       <div className="mb-4 grid gap-4 lg:grid-cols-[1fr_auto_auto] lg:items-end">
         <div>
-          <h2 className="font-black">Grade HorÃ¡ria Completa</h2>
+          <h2 className="font-black">Grade Horária Completa</h2>
           <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
             Filtre por disciplina para localizar e editar aulas rapidamente.
           </p>
@@ -1645,7 +1766,7 @@ function SchedulesManager({
         <label className="grid min-w-56 gap-2 text-sm font-semibold text-zinc-700 dark:text-zinc-200">
           Filtrar disciplina
           <select
-            value={scheduleFilterDiscipline}
+            value={activeScheduleFilter}
             onChange={(event) => setScheduleFilterDiscipline(event.currentTarget.value)}
             className="h-10 rounded-lg border border-zinc-200 bg-white px-3 text-sm text-zinc-950 outline-none transition-all duration-200 hover:border-zinc-300 focus:border-[#36c486] focus:ring-4 focus:ring-emerald-100 dark:border-white/10 dark:bg-[#07120d] dark:text-white dark:hover:border-white/20 dark:focus:ring-emerald-950/40"
           >
@@ -1687,7 +1808,7 @@ function SchedulesManager({
           <div className="md:col-span-3">
             <h3 className="font-black">{editingSchedule ? "Editar aula" : "Nova aula"}</h3>
             <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
-              Escolha a disciplina, o professor, a sala e um dos 7 perÃ­odos.
+              Escolha a disciplina, o professor, a sala e um dos 7 períodos.
             </p>
             <div className="mt-3 inline-flex items-center gap-2 rounded-full bg-amber-50 px-3 py-1.5 text-xs font-black text-amber-700 dark:bg-amber-500/10 dark:text-amber-200">
               <Clock size={14} /> {schoolBreak.label}: {schoolBreak.start}-{schoolBreak.end}
@@ -1707,7 +1828,7 @@ function SchedulesManager({
             <option value="" disabled>Selecione</option>
             {teachersByDiscipline.map((teacher) => (
               <option key={teacher.id} value={teacher.id}>
-                {teacher.fullName} Â· {teacher.discipline}
+                {teacher.fullName} · {teacher.discipline}
               </option>
             ))}
           </SelectInput>
@@ -1715,7 +1836,7 @@ function SchedulesManager({
             {workWeek.map((day) => <option key={day.value} value={day.value}>{day.label}</option>)}
           </SelectInput>
           <SelectInput
-            label="PerÃ­odo"
+            label="Período"
             name="periodPreset"
             value={selectedPeriod}
             onChange={(event) => setSelectedPeriod(event.currentTarget.value)}
@@ -1723,14 +1844,14 @@ function SchedulesManager({
           >
             {periodChoices.map((period) => (
               <option key={period.value} value={period.value}>
-                {period.label} Â· {period.start}-{period.end}
+                {period.label} · {period.start}-{period.end}
               </option>
             ))}
           </SelectInput>
           <input type="hidden" name="periodLabel" value={selectedPeriodData.label} />
           <input type="hidden" name="startTime" value={selectedPeriodData.start} />
           <input type="hidden" name="endTime" value={selectedPeriodData.end} />
-          <TextInput label="Turma" name="classGroup" placeholder="Ex: 2Âº DS" defaultValue={editingSchedule?.classGroup ?? ""} required />
+          <TextInput label="Turma" name="classGroup" placeholder="Ex: 2º DS" defaultValue={editingSchedule?.classGroup ?? ""} required />
           <SelectInput label="Sala" name="roomId" defaultValue={editingSchedule?.roomId ?? ""} required>
             <option value="" disabled>Selecione</option>
             {data.rooms.map((room) => <option key={room.id} value={room.id}>{room.name}</option>)}
@@ -1741,7 +1862,7 @@ function SchedulesManager({
             </p>
           )}
           <div className="flex items-end gap-2 md:col-span-2">
-            <Button type="submit" disabled={loading}>{editingSchedule ? "Salvar alteraÃ§Ãµes" : "Salvar horÃ¡rio"}</Button>
+            <Button type="submit" disabled={loading}>{editingSchedule ? "Salvar alterações" : "Salvar horário"}</Button>
             <Button
               variant="secondary"
               onClick={closeForm}
@@ -1772,17 +1893,17 @@ function SchedulesManager({
 
       {data.schedules.length === 0 ? (
         <EmptyState icon={<Calendar size={26} />} title="Nenhuma aula cadastrada" />
-      ) : visibleSchedules.length === 0 ? (
-        <EmptyState icon={<Calendar size={26} />} title="Nenhuma aula encontrada para esse filtro" />
-      ) : classGroups.length === 0 ? (
+      ) : daySchedules.length === 0 ? (
         <EmptyState icon={<Calendar size={26} />} title="Nenhuma aula para este dia" />
+      ) : activeScheduleFilter && visibleDaySchedules.length === 0 ? (
+        <EmptyState icon={<Calendar size={26} />} title="Nenhuma aula encontrada para esse filtro" />
       ) : (
         <div className="overflow-x-auto rounded-2xl border border-zinc-200 dark:border-white/10">
           <table className="w-full min-w-[920px] border-separate border-spacing-0 text-left text-sm">
             <thead>
               <tr className="bg-zinc-50 text-xs uppercase tracking-wide text-zinc-400 dark:bg-white/[0.03]">
                 <th className="sticky left-0 z-10 border-b border-zinc-200 bg-zinc-50 px-4 py-3 font-black dark:border-white/10 dark:bg-[#07120d]">
-                  HorÃ¡rio
+                  Horário
                 </th>
                 {classGroups.map((classGroup) => (
                   <th key={classGroup} className="border-b border-zinc-200 px-4 py-3 font-black dark:border-white/10">
@@ -1800,7 +1921,7 @@ function SchedulesManager({
                   </td>
                   {classGroups.map((classGroup) => {
                     const items = visibleDaySchedules.filter(
-                      (schedule) => schedule.classGroup === classGroup && schedule.periodLabel === period.label,
+                      (schedule) => schedule.classGroup === classGroup && samePeriod(schedule, period),
                     );
                     return (
                       <td key={`${period.value}-${classGroup}`} className="min-w-48 border-b border-zinc-100 p-3 align-top dark:border-white/10">
@@ -1901,18 +2022,18 @@ function NoticesManager({
           }}
         >
           <div className="grid gap-3 md:grid-cols-3">
-            <TextInput label="TÃ­tulo do aviso" name="title" placeholder="ReuniÃ£o pedagÃ³gica" required />
+            <TextInput label="Título do aviso" name="title" placeholder="Reunião pedagógica" required />
             <TextInput label="Categoria" name="category" placeholder="Geral" />
             <TextInput label="Expira em" name="expiresAt" type="date" />
           </div>
           <label className="grid gap-2 text-sm font-semibold text-zinc-700 dark:text-zinc-200">
-            DescriÃ§Ã£o
+            Descrição
             <textarea
               name="body"
               rows={4}
               required
               className="rounded-xl border border-zinc-200 bg-white px-4 py-3 text-base text-zinc-950 outline-none transition-all duration-200 placeholder:text-zinc-400 hover:border-zinc-300 focus:border-[#36c486] focus:ring-4 focus:ring-emerald-100 dark:border-white/10 dark:bg-white/5 dark:text-white dark:placeholder:text-zinc-500 dark:hover:border-white/20 dark:focus:ring-emerald-950/40"
-              placeholder="Detalhe o comunicado para todos os usuÃ¡rios."
+              placeholder="Detalhe o comunicado para todos os usuários."
             />
           </label>
           <div className="flex flex-wrap gap-2">
@@ -1982,9 +2103,9 @@ function TeacherOverview({
           </div>
         </div>
         <ResponsiveTable
-          headers={["PerÃ­odo", "Disciplina", "Turma", "Sala"]}
+          headers={["Período", "Disciplina", "Turma", "Sala"]}
           rows={todaySchedules.map((schedule) => [
-            `${schedule.periodLabel} Â· ${schedule.startTime}-${schedule.endTime}`,
+            `${schedule.periodLabel} · ${schedule.startTime}-${schedule.endTime}`,
             schedule.discipline,
             schedule.classGroup,
             schedule.roomName,
@@ -2033,9 +2154,9 @@ function TeacherSchedules({ schedules }: { schedules: AppSnapshot["schedules"] }
   const disciplines = Array.from(new Set(schedules.map((schedule) => schedule.discipline))).sort((a, b) => a.localeCompare(b));
   return (
     <section className="grid gap-5">
-      <h2 className="text-2xl font-black">HorÃ¡rios por disciplina</h2>
+      <h2 className="text-2xl font-black">Horários por disciplina</h2>
       {schedules.length === 0 ? (
-        <EmptyState icon={<Calendar size={26} />} title="Nenhum horÃ¡rio cadastrado" />
+        <EmptyState icon={<Calendar size={26} />} title="Nenhum horário cadastrado" />
       ) : (
         <div className="grid gap-5">
           {disciplines.map((discipline) => {
@@ -2047,7 +2168,7 @@ function TeacherSchedules({ schedules }: { schedules: AppSnapshot["schedules"] }
                   <table className="w-full min-w-[760px] border-separate border-spacing-2 text-sm">
                     <thead>
                       <tr>
-                        <th className="rounded-lg bg-zinc-100 p-3 text-left dark:bg-white/5">PerÃ­odo</th>
+                        <th className="rounded-lg bg-zinc-100 p-3 text-left dark:bg-white/5">Período</th>
                         {workWeek.map((day) => (
                           <th key={day.value} className="rounded-lg bg-zinc-100 p-3 text-left dark:bg-white/5">{day.label}</th>
                         ))}
@@ -2062,7 +2183,7 @@ function TeacherSchedules({ schedules }: { schedules: AppSnapshot["schedules"] }
                             <span className="text-xs font-normal text-zinc-400">{period.start}-{period.end}</span>
                           </td>
                           {workWeek.map((day) => {
-                            const item = disciplineSchedules.find((schedule) => schedule.weekday === day.value && schedule.periodLabel === period.label);
+                            const item = disciplineSchedules.find((schedule) => schedule.weekday === day.value && samePeriod(schedule, period));
                             return (
                               <td key={day.value} className="h-24 rounded-lg border border-zinc-100 p-3 align-top dark:border-white/10">
                                 {item ? (
@@ -2071,7 +2192,7 @@ function TeacherSchedules({ schedules }: { schedules: AppSnapshot["schedules"] }
                                     <div className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">{item.roomName}</div>
                                   </div>
                                 ) : (
-                                  <span className="text-zinc-300">â€”</span>
+                                  <span className="text-zinc-300">—</span>
                                 )}
                               </td>
                             );
@@ -2138,9 +2259,9 @@ function TeacherReservations({
             {freeRooms.map((room) => <option key={room.id} value={room.id}>{room.name}</option>)}
           </SelectInput>
           <TextInput label="Data" name="date" type="date" defaultValue={today()} required />
-          <TextInput label="InÃ­cio" name="startTime" type="time" required />
-          <TextInput label="TÃ©rmino" name="endTime" type="time" required />
-          <TextInput label="Motivo" name="reason" placeholder="Ex: aula prÃ¡tica" className="md:col-span-2" />
+          <TextInput label="Início" name="startTime" type="time" required />
+          <TextInput label="Término" name="endTime" type="time" required />
+          <TextInput label="Motivo" name="reason" placeholder="Ex: aula prática" className="md:col-span-2" />
           <div className="flex gap-2 md:col-span-2">
             <Button type="submit" disabled={loading}>Enviar Solicitação</Button>
             <Button variant="secondary" onClick={() => setReservationOpen(false)}>Cancelar</Button>
@@ -2149,12 +2270,12 @@ function TeacherReservations({
       )}
 
       <ResponsiveTable
-        headers={["Sala", "Data", "HorÃ¡rio", "Motivo", "Status"]}
+        headers={["Sala", "Data", "Horário", "Motivo", "Status"]}
         rows={reservations.map((reservation) => [
           reservation.roomName,
           dateLabel(reservation.date),
           `${reservation.startTime}-${reservation.endTime}`,
-          reservation.reason ?? "â€”",
+          reservation.reason ?? "—",
           reservationStatusLabel(reservation.status),
         ])}
         empty={<EmptyState icon={<ClipboardList size={26} />} title="Sem reservas" />}
@@ -2177,13 +2298,57 @@ function TeacherProfile({
   const name = teacher?.fullName ?? session.name;
   const avatar = teacher?.avatarUrl;
 
-  const handleFile = (file: File | undefined) => {
+  const readFileAsDataUrl = (file: File) =>
+    new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result ?? ""));
+      reader.onerror = () => reject(reader.error);
+      reader.readAsDataURL(file);
+    });
+
+  const resizeAvatar = (file: File) =>
+    new Promise<string>((resolve, reject) => {
+      if (!file.type.startsWith("image/")) {
+        reject(new Error("Selecione uma imagem."));
+        return;
+      }
+
+      const image = new Image();
+      const objectUrl = URL.createObjectURL(file);
+      image.onload = () => {
+        URL.revokeObjectURL(objectUrl);
+        const maxSize = 520;
+        const scale = Math.min(1, maxSize / Math.max(image.width, image.height));
+        const width = Math.max(1, Math.round(image.width * scale));
+        const height = Math.max(1, Math.round(image.height * scale));
+        const canvas = document.createElement("canvas");
+        canvas.width = width;
+        canvas.height = height;
+        const context = canvas.getContext("2d");
+        if (!context) {
+          reject(new Error("Não foi possível preparar a foto."));
+          return;
+        }
+        context.fillStyle = "#ffffff";
+        context.fillRect(0, 0, width, height);
+        context.drawImage(image, 0, 0, width, height);
+        resolve(canvas.toDataURL("image/jpeg", 0.84));
+      };
+      image.onerror = () => {
+        URL.revokeObjectURL(objectUrl);
+        reject(new Error("Não foi possível ler a imagem."));
+      };
+      image.src = objectUrl;
+    });
+
+  const handleFile = async (file: File | undefined) => {
     if (!file) return;
-    const reader = new FileReader();
-    reader.onload = () => {
-      void postAction("updateAvatar", { avatarUrl: String(reader.result ?? "") });
-    };
-    reader.readAsDataURL(file);
+    try {
+      const avatarUrl = await resizeAvatar(file).catch(() => readFileAsDataUrl(file));
+      await postAction("updateAvatar", { avatarUrl });
+    } catch (error) {
+      window.alert(error instanceof Error ? error.message : "Não foi possível alterar a foto.");
+    }
   };
 
   return (
@@ -2217,13 +2382,16 @@ function TeacherProfile({
           type="file"
           accept="image/*"
           className="hidden"
-          onChange={(event) => handleFile(event.target.files?.[0])}
+          onChange={(event) => {
+            void handleFile(event.target.files?.[0]);
+            event.currentTarget.value = "";
+          }}
         />
         <dl className="mt-8 grid gap-0 divide-y divide-zinc-100 dark:divide-white/10">
           {[
             ["E-mail", teacher?.email ?? session.email],
-            ["FunÃ§Ã£o", "Professor"],
-            ["Disciplina", teacher?.discipline ?? "â€”"],
+            ["Função", "Professor"],
+            ["Disciplina", teacher?.discipline ?? "—"],
           ].map(([label, value]) => (
             <div key={label} className="grid grid-cols-[1fr_1.4fr] gap-4 py-4">
               <dt className="text-zinc-500 dark:text-zinc-400">{label}</dt>

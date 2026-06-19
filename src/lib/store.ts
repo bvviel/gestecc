@@ -79,6 +79,10 @@ function normalizeContractType(value: string): ContractType {
   return value === "permanent" ? "permanent" : "temporary";
 }
 
+function contractTypeText(value: ContractType) {
+  return value === "permanent" ? "concursado" : "não concursado";
+}
+
 function getManagerCredentials() {
   return {
     username: process.env.GESTECC_MANAGER_USERNAME,
@@ -524,7 +528,7 @@ export async function createTeacherRequest(payload: ActionPayload) {
       targetRole: "manager",
       teacherId: null,
       title: "Nova solicitação de cadastro",
-      body: `${fullName} solicitou acesso como professor de ${discipline}.`,
+      body: `${fullName} solicitou acesso como professor de ${discipline}. E-mail: ${email}. Vínculo: ${contractTypeText(contractType)}.`,
       kind: "teacher_request",
       readAt: null,
       payload: { requestId: request.id },
@@ -573,7 +577,7 @@ export async function createTeacherRequest(payload: ActionPayload) {
     target_role: "manager",
     teacher_id: null,
     title: "Nova solicitação de cadastro",
-    body: `${fullName} solicitou acesso como professor de ${discipline}.`,
+    body: `${fullName} solicitou acesso como professor de ${discipline}. E-mail: ${email}. Vínculo: ${contractTypeText(contractType)}.`,
     kind: "teacher_request",
     payload: { requestId: request.id },
   });
@@ -855,6 +859,57 @@ export async function performAction(
       claims,
       String(payload.requestId ?? ""),
       String(payload.reason ?? "Solicitação recusada pela gestão."),
+    );
+    return getSnapshot(claims);
+  }
+
+  if (action === "deleteTeacher") {
+    requireManager(claims);
+    const teacherId = String(payload.teacherId ?? "");
+    const teacher = await lookupTeacher(teacherId);
+
+    if (!isSupabaseConfigured()) {
+      const state = memory();
+      state.teachers = state.teachers.filter((item) => item.id !== teacherId);
+      state.schedules = state.schedules.filter((item) => item.teacherId !== teacherId);
+      state.reservations = state.reservations.filter((item) => item.teacherId !== teacherId);
+      state.notifications = state.notifications.filter((item) => item.teacherId !== teacherId);
+      delete state.teacherSecrets[teacherId];
+      for (const room of state.rooms) {
+        if (room.currentTeacherId === teacherId) {
+          room.status = "free";
+          room.currentTeacherId = null;
+          room.currentTeacherName = null;
+          room.currentClass = null;
+          room.currentPeriod = null;
+          room.updatedAt = nowIso();
+        }
+      }
+    } else {
+      const supabase = getSupabaseAdmin();
+      if (!supabase) rowError("Supabase não configurado.");
+      const { error: roomError } = await supabase
+        .from("rooms")
+        .update({
+          status: "free",
+          current_teacher_id: null,
+          current_teacher_name: null,
+          current_class: null,
+          current_period: null,
+          updated_at: nowIso(),
+        })
+        .eq("current_teacher_id", teacherId);
+      if (roomError) rowError(roomError.message);
+
+      const { error: deleteError } = await supabase.from("teachers").delete().eq("id", teacherId);
+      if (deleteError) rowError(deleteError.message);
+    }
+
+    await addManagerNotification(
+      "Professor removido",
+      `${teacher.fullName} (${teacher.email}) foi removido pela gestão.`,
+      "teacher_deleted",
+      { teacherId },
     );
     return getSnapshot(claims);
   }
