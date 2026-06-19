@@ -63,8 +63,6 @@ const periodOptions = [
 const schoolBreak = { label: "Intervalo", start: "10:00", end: "10:15" };
 const defaultClassGroups = [
   "1º DS",
-  "2º DS",
-  "3º DS",
   "1º Administração",
   "2º Administração",
   "3º Administração",
@@ -149,6 +147,17 @@ function periodFromValue(value: string) {
 
 function samePeriod(schedule: Pick<Schedule, "periodLabel" | "startTime" | "endTime">, period: typeof periodOptions[number]) {
   return schedule.periodLabel === period.label || (schedule.startTime === period.start && schedule.endTime === period.end);
+}
+
+function normalizeClassGroup(value: string) {
+  return value
+    .replaceAll("\u00c3\u201a\u00c2\u00ba", "º")
+    .replaceAll("\u00c3\u201a\u00c2\u00aa", "ª")
+    .replaceAll("\u00c2\u00ba", "º")
+    .replaceAll("\u00c2\u00aa", "ª")
+    .replaceAll("°", "º")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function getFormString(form: HTMLFormElement, name: string) {
@@ -1508,7 +1517,7 @@ function ManagerPeople({
               <option value="" disabled>Selecione</option>
               {DISCIPLINES.map((discipline) => <option key={discipline}>{discipline}</option>)}
             </SelectInput>
-            <TextInput label="Turma" name="classGroup" placeholder="Ex: 2º DS" required />
+            <TextInput label="Turma" name="classGroup" placeholder="Ex: 1º DS" required />
             <SelectInput label="Sala" name="roomId" defaultValue="" required>
               <option value="" disabled>Selecione</option>
               {data.rooms.map((room) => <option key={room.id} value={room.id}>{room.name}</option>)}
@@ -1714,12 +1723,19 @@ function SchedulesManager({
   const visibleDaySchedules = activeScheduleFilter
     ? daySchedules.filter((schedule) => schedule.discipline === activeScheduleFilter)
     : daySchedules;
-  const classGroups = useMemo(
+  const allClassGroups = useMemo(
     () =>
-      Array.from(new Set([...defaultClassGroups, ...data.schedules.map((schedule) => schedule.classGroup).filter(Boolean)]))
+      Array.from(new Set([...defaultClassGroups, ...data.schedules.map((schedule) => normalizeClassGroup(schedule.classGroup)).filter(Boolean)]))
         .sort((a, b) => a.localeCompare(b, "pt-BR", { numeric: true })),
     [data.schedules],
   );
+  const filteredClassGroups = useMemo(
+    () =>
+      Array.from(new Set(visibleDaySchedules.map((schedule) => normalizeClassGroup(schedule.classGroup)).filter(Boolean)))
+        .sort((a, b) => a.localeCompare(b, "pt-BR", { numeric: true })),
+    [visibleDaySchedules],
+  );
+  const displayedClassGroups = activeScheduleFilter ? filteredClassGroups : allClassGroups;
   const teachersByDiscipline = selectedDiscipline
     ? data.teachers.filter((teacher) => teacher.discipline === selectedDiscipline)
     : data.teachers;
@@ -1755,30 +1771,29 @@ function SchedulesManager({
   };
 
   return (
-    <section className="rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm dark:border-white/10 dark:bg-white/[0.04]">
-      <div className="mb-4 grid gap-4 lg:grid-cols-[1fr_auto_auto] lg:items-end">
-        <div>
+    <section className="w-full max-w-full overflow-hidden rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm dark:border-white/10 dark:bg-white/[0.04]">
+      <div className="mb-4 flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
+        <div className="min-w-0">
           <h2 className="font-black">Grade Horária Completa</h2>
-          <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
-            Filtre por disciplina para localizar e editar aulas rapidamente.
+          <p className="mt-1 max-w-2xl text-sm text-zinc-500 dark:text-zinc-400">
+            Filtre por disciplina para localizar e editar aulas rapidamente. A grade rola para o lado quando houver muitas turmas.
           </p>
         </div>
-        <label className="grid min-w-56 gap-2 text-sm font-semibold text-zinc-700 dark:text-zinc-200">
-          Filtrar disciplina
-          <select
-            value={activeScheduleFilter}
-            onChange={(event) => setScheduleFilterDiscipline(event.currentTarget.value)}
-            className="h-10 rounded-lg border border-zinc-200 bg-white px-3 text-sm text-zinc-950 outline-none transition-all duration-200 hover:border-zinc-300 focus:border-[#36c486] focus:ring-4 focus:ring-emerald-100 dark:border-white/10 dark:bg-[#07120d] dark:text-white dark:hover:border-white/20 dark:focus:ring-emerald-950/40"
-          >
-            <option value="">Todas</option>
-            {scheduleDisciplines.map((discipline) => (
-              <option key={discipline} value={discipline}>{discipline}</option>
-            ))}
-          </select>
-        </label>
-        <Button onClick={scheduleOpen && !editingSchedule ? closeForm : openNewSchedule}>
-          <Plus size={15} /> Nova Aula
-        </Button>
+        <div className="flex w-full flex-col gap-3 sm:flex-row sm:items-end xl:w-auto">
+          <label className="grid w-full gap-2 text-sm font-semibold text-zinc-700 dark:text-zinc-200 sm:w-64">
+            Filtrar disciplina
+            <select
+              value={activeScheduleFilter}
+              onChange={(event) => setScheduleFilterDiscipline(event.currentTarget.value)}
+              className="h-10 rounded-lg border border-zinc-200 bg-white px-3 text-sm text-zinc-950 outline-none transition-all duration-200 hover:border-zinc-300 focus:border-[#36c486] focus:ring-4 focus:ring-emerald-100 dark:border-white/10 dark:bg-[#07120d] dark:text-white dark:hover:border-white/20 dark:focus:ring-emerald-950/40"
+            >
+              <option value="">Todas</option>
+              {scheduleDisciplines.map((discipline) => (
+                <option key={discipline} value={discipline}>{discipline}</option>
+              ))}
+            </select>
+          </label>
+        </div>
       </div>
 
       {scheduleOpen && (
@@ -1851,7 +1866,7 @@ function SchedulesManager({
           <input type="hidden" name="periodLabel" value={selectedPeriodData.label} />
           <input type="hidden" name="startTime" value={selectedPeriodData.start} />
           <input type="hidden" name="endTime" value={selectedPeriodData.end} />
-          <TextInput label="Turma" name="classGroup" placeholder="Ex: 2º DS" defaultValue={editingSchedule?.classGroup ?? ""} required />
+          <TextInput label="Turma" name="classGroup" placeholder="Ex: 1º DS" defaultValue={editingSchedule?.classGroup ?? ""} required />
           <SelectInput label="Sala" name="roomId" defaultValue={editingSchedule?.roomId ?? ""} required>
             <option value="" disabled>Selecione</option>
             {data.rooms.map((room) => <option key={room.id} value={room.id}>{room.name}</option>)}
@@ -1873,22 +1888,30 @@ function SchedulesManager({
         </form>
       )}
 
-      <div className="mb-4 flex flex-wrap gap-2 rounded-2xl bg-zinc-100 p-1.5 dark:bg-white/5">
-        {workWeek.map((day) => (
-          <button
-            key={day.value}
-            type="button"
-            onClick={() => setScheduleDay(day.value)}
-            className={cx(
-              "h-9 rounded-xl px-4 text-sm font-black transition-all duration-300 hover:-translate-y-0.5 active:scale-[0.98]",
-              scheduleDay === day.value
-                ? "bg-white text-[#0f8a61] shadow-sm dark:bg-[#123322] dark:text-emerald-100"
-                : "text-zinc-500 hover:text-zinc-950 dark:text-zinc-400 dark:hover:text-white",
-            )}
-          >
-            {day.label}
-          </button>
-        ))}
+      <div className="sticky top-3 z-20 mb-4 mt-4 flex flex-col gap-3 rounded-2xl bg-zinc-100 px-1.5 pb-1.5 pt-4 shadow-sm dark:bg-[#07120d] sm:flex-row sm:items-center sm:justify-between">
+        <Button
+          onClick={scheduleOpen && !editingSchedule ? closeForm : openNewSchedule}
+          className="h-9 w-full shrink-0 translate-y-2 sm:w-auto"
+        >
+          <Plus size={15} /> {scheduleOpen && !editingSchedule ? "Fechar" : "Nova Aula"}
+        </Button>
+        <div className="flex min-w-0 flex-wrap gap-2">
+          {workWeek.map((day) => (
+            <button
+              key={day.value}
+              type="button"
+              onClick={() => setScheduleDay(day.value)}
+              className={cx(
+                "h-9 rounded-xl px-4 text-sm font-black transition-all duration-300 hover:-translate-y-0.5 active:scale-[0.98]",
+                scheduleDay === day.value
+                  ? "bg-white text-[#0f8a61] shadow-sm dark:bg-[#123322] dark:text-emerald-100"
+                  : "text-zinc-500 hover:text-zinc-950 dark:text-zinc-400 dark:hover:text-white",
+              )}
+            >
+              {day.label}
+            </button>
+          ))}
+        </div>
       </div>
 
       {data.schedules.length === 0 ? (
@@ -1905,7 +1928,7 @@ function SchedulesManager({
                 <th className="sticky left-0 z-10 border-b border-zinc-200 bg-zinc-50 px-4 py-3 font-black dark:border-white/10 dark:bg-[#07120d]">
                   Horário
                 </th>
-                {classGroups.map((classGroup) => (
+                {displayedClassGroups.map((classGroup) => (
                   <th key={classGroup} className="border-b border-zinc-200 px-4 py-3 font-black dark:border-white/10">
                     {classGroup}
                   </th>
@@ -1919,9 +1942,9 @@ function SchedulesManager({
                     <div>{period.label}</div>
                     <div className="mt-1 text-xs font-semibold text-zinc-400">{period.start}-{period.end}</div>
                   </td>
-                  {classGroups.map((classGroup) => {
+                  {displayedClassGroups.map((classGroup) => {
                     const items = visibleDaySchedules.filter(
-                      (schedule) => schedule.classGroup === classGroup && samePeriod(schedule, period),
+                      (schedule) => normalizeClassGroup(schedule.classGroup) === classGroup && samePeriod(schedule, period),
                     );
                     return (
                       <td key={`${period.value}-${classGroup}`} className="min-w-48 border-b border-zinc-100 p-3 align-top dark:border-white/10">
@@ -1932,7 +1955,12 @@ function SchedulesManager({
                             {items.map((schedule) => (
                               <article
                                 key={schedule.id}
-                                className="rounded-xl border border-emerald-100 bg-emerald-50/70 p-3 transition-all duration-300 hover:-translate-y-0.5 hover:shadow-md dark:border-emerald-400/20 dark:bg-emerald-400/10"
+                                className={cx(
+                                  "rounded-xl border p-3 transition-all duration-300 hover:-translate-y-0.5 hover:shadow-md",
+                                  activeScheduleFilter
+                                    ? "border-emerald-300 bg-emerald-100 shadow-sm shadow-emerald-900/10 ring-1 ring-emerald-200 dark:border-emerald-300/40 dark:bg-emerald-400/15 dark:ring-emerald-300/20"
+                                    : "border-emerald-100 bg-emerald-50/70 dark:border-emerald-400/20 dark:bg-emerald-400/10",
+                                )}
                               >
                                 <div className="font-black text-zinc-900 dark:text-white">{schedule.discipline}</div>
                                 <div className="mt-1 text-xs font-semibold text-zinc-600 dark:text-zinc-300">
