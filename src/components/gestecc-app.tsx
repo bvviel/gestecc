@@ -334,6 +334,7 @@ export function GesteccApp() {
   const [reservationOpen, setReservationOpen] = useState(false);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [pushState, setPushState] = useState<PushState>("idle");
+  const [snapshotLoaded, setSnapshotLoaded] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -371,7 +372,9 @@ export function GesteccApp() {
     const json = (await response.json()) as ApiResponse<AppSnapshot>;
     if (json.ok) {
       setData(json.data);
+      setSnapshotLoaded(true);
     } else {
+      setSnapshotLoaded(true);
       setMessage(json.message);
       if (response.status === 401) {
         setSession(null);
@@ -545,6 +548,7 @@ export function GesteccApp() {
       };
 
       localStorage.setItem("gestecc-session", JSON.stringify(nextSession));
+      setSnapshotLoaded(false);
       setSession(nextSession);
       setPage(mode === "manager" ? "manager" : "general");
       setAuthView("select");
@@ -592,6 +596,7 @@ export function GesteccApp() {
   const logout = () => {
     setSession(null);
     setData(emptyData);
+    setSnapshotLoaded(false);
     setPage("general");
     localStorage.removeItem("gestecc-session");
   };
@@ -1139,7 +1144,7 @@ export function GesteccApp() {
           </div>
         )}
 
-        {data.mode === "memory" && (
+        {snapshotLoaded && data.mode === "memory" && (
           <div className="mb-5 rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-xs font-semibold text-emerald-800 dark:border-emerald-900/70 dark:bg-emerald-950/30 dark:text-emerald-200">
             Modo local: conecte as variáveis do Supabase para persistência online.
           </div>
