@@ -1934,21 +1934,16 @@ function SchedulesManager({
     : daySchedules;
   const allClassGroups = useMemo(
     () =>
-      Array.from(new Set([
-        ...classGroupsForShift(scheduleShift),
-        ...data.schedules
-          .filter((schedule) => schedule.shift === scheduleShift)
-          .map((schedule) => normalizeClassGroup(schedule.classGroup))
-          .filter(Boolean),
-      ]))
+      classGroupsForShift(scheduleShift)
         .sort((a, b) => a.localeCompare(b, "pt-BR", { numeric: true })),
-    [data.schedules, scheduleShift],
+    [scheduleShift],
   );
   const filteredClassGroups = useMemo(
     () =>
-      Array.from(new Set(visibleDaySchedules.map((schedule) => normalizeClassGroup(schedule.classGroup)).filter(Boolean)))
-        .sort((a, b) => a.localeCompare(b, "pt-BR", { numeric: true })),
-    [visibleDaySchedules],
+      allClassGroups.filter((classGroup) =>
+        visibleDaySchedules.some((schedule) => normalizeClassGroup(schedule.classGroup) === classGroup),
+      ),
+    [allClassGroups, visibleDaySchedules],
   );
   const displayedClassGroups = activeScheduleFilter ? filteredClassGroups : allClassGroups;
   const teachersByDiscipline = selectedDiscipline
@@ -1963,12 +1958,9 @@ function SchedulesManager({
       ];
   const classGroupChoices = useMemo(
     () =>
-      Array.from(new Set([
-        ...classGroupsForShift(scheduleShift),
-        ...(editingSchedule ? [normalizeClassGroup(editingSchedule.classGroup)] : []),
-      ].filter(Boolean)))
+      classGroupsForShift(scheduleShift)
         .sort((a, b) => a.localeCompare(b, "pt-BR", { numeric: true })),
-    [editingSchedule, scheduleShift],
+    [scheduleShift],
   );
 
   const openNewSchedule = () => {

@@ -2,6 +2,7 @@ import webpush, { type PushSubscription as WebPushSubscription } from "web-push"
 import { createMemoryState, type MemoryState } from "./demo-data";
 import { getSupabaseAdmin, isSupabaseConfigured } from "./supabase-server";
 import { hashPassword, signSession, verifyPassword } from "./security";
+import { CLASS_GROUPS_BY_SHIFT } from "./types";
 import type {
   AppSnapshot,
   ContractType,
@@ -151,6 +152,21 @@ function normalizeDisciplines(value: unknown, fallback = "") {
 
 function normalizeShift(value: unknown): Shift {
   return value === "afternoon" || value === "night" ? value : "morning";
+}
+
+function classGroupKey(value: string) {
+  return value
+    .normalize("NFD")
+    .replace(/\p{Diacritic}/gu, "")
+    .replace(/[º°ª]/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLocaleLowerCase("pt-BR");
+}
+
+function canonicalClassGroupForShift(value: string, shift: Shift) {
+  const key = classGroupKey(value);
+  return CLASS_GROUPS_BY_SHIFT[shift].find((classGroup) => classGroupKey(classGroup) === key) ?? "";
 }
 
 function shiftFromTime(startTime: string): Shift {
@@ -881,17 +897,19 @@ async function lookupReservation(reservationId: string) {
 }
 
 function validateSchedulePayload(payload: ActionPayload, fallbackDiscipline: string) {
-  const classGroup = String(payload.classGroup ?? "").trim();
+  const rawClassGroup = String(payload.classGroup ?? "").trim();
   const periodLabel = String(payload.periodLabel ?? "").trim();
   const discipline = String(payload.discipline ?? fallbackDiscipline).trim();
   const shift = normalizeShift(payload.shift);
+  const classGroup = canonicalClassGroupForShift(rawClassGroup, shift);
   const startTime = String(payload.startTime ?? "");
   const endTime = String(payload.endTime ?? "");
   const weekday = Number(payload.weekday ?? 1);
 
-  if (!classGroup || !periodLabel || !discipline || !startTime || !endTime) {
+  if (!rawClassGroup || !periodLabel || !discipline || !startTime || !endTime) {
     rowError("Preencha todos os dados do horário.");
   }
+  if (!classGroup) rowError("Selecione uma turma válida para esse turno.");
   if (weekday < 1 || weekday > 5) rowError("Selecione um dia útil para a aula.");
 
   return { classGroup, periodLabel, discipline, shift, startTime, endTime, weekday };
