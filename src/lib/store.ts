@@ -1,3 +1,4 @@
+import webpush, { type PushSubscription as WebPushSubscription } from "web-push";
 import { createMemoryState, type MemoryState } from "./demo-data";
 import { getSupabaseAdmin, isSupabaseConfigured } from "./supabase-server";
 import { hashPassword, signSession, verifyPassword } from "./security";
@@ -19,7 +20,7 @@ type LoginResult =
   | { ok: true; token: string; role: "teacher"; name: string; email: string; teacherId: string }
   | { ok: false; message: string; status?: "pending" | "rejected" | "invalid" };
 
-type ActionPayload = Record<string, string | number | null | undefined>;
+type ActionPayload = Record<string, unknown>;
 
 const globalForMemory = globalThis as typeof globalThis & {
   __gesteccMemory?: MemoryState;
@@ -53,6 +54,37 @@ function addYears(date: string, years: number) {
 
 function newId(prefix: string) {
   return `${prefix}-${crypto.randomUUID()}`;
+}
+
+function pushVapidConfig() {
+  const publicKey = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY;
+  const privateKey = process.env.VAPID_PRIVATE_KEY;
+  const subject = process.env.VAPID_SUBJECT || "mailto:gestec@example.com";
+
+  if (!publicKey || !privateKey) return null;
+  webpush.setVapidDetails(subject, publicKey, privateKey);
+  return { publicKey, privateKey, subject };
+}
+
+function toRecord(value: unknown) {
+  return value && typeof value === "object" ? (value as Record<string, unknown>) : {};
+}
+
+function subscriptionFromPayload(payload: ActionPayload): WebPushSubscription {
+  const subscription = toRecord(payload.subscription);
+  const keys = toRecord(subscription.keys);
+  const endpoint = String(subscription.endpoint ?? "");
+  const p256dh = String(keys.p256dh ?? "");
+  const auth = String(keys.auth ?? "");
+
+  if (!endpoint || !p256dh || !auth) {
+    rowError("Inscrição de notificação inválida.");
+  }
+
+  return {
+    endpoint,
+    keys: { p256dh, auth },
+  };
 }
 
 function memory() {
@@ -894,6 +926,65 @@ async function addTeacherNotification(
     payload,
   });
   if (error) rowError(error.message);
+  await sendTeacherPushNotification(teacherId, title, body, { kind, payload });
+}
+
+async function sendTeacherPushNotification(
+  teacherId: string,
+  title: string,
+  body: string,
+  data: Record<string, unknown> = {},
+) {
+  if (!isSupabaseConfigured() || !pushVapidConfig()) return;
+
+  const supabase = getSupabaseAdmin();
+  if (!supabase) return;
+
+  const { data: subscriptions, error } = await supabase
+    .from("push_subscriptions")
+    .select("endpoint,p256dh,auth")
+    .eq("teacher_id", teacherId);
+
+  if (error) {
+    console.warn("Push notifications are not ready:", error.message);
+    return;
+  }
+
+  await Promise.all(
+    (subscriptions ?? []).map(async (row) => {
+      const endpoint = String((row as Record<string, unknown>).endpoint ?? "");
+      const subscription: WebPushSubscription = {
+        endpoint,
+        keys: {
+          p256dh: String((row as Record<string, unknown>).p256dh ?? ""),
+          auth: String((row as Record<string, unknown>).auth ?? ""),
+        },
+      };
+
+      try {
+        await webpush.sendNotification(
+          subscription,
+          JSON.stringify({
+            title,
+            body,
+            icon: "/favicon.ico",
+            badge: "/favicon.ico",
+            url: "/",
+            data,
+          }),
+        );
+      } catch (error) {
+        const statusCode = typeof error === "object" && error && "statusCode" in error
+          ? Number((error as { statusCode?: number }).statusCode)
+          : 0;
+        if (statusCode === 404 || statusCode === 410) {
+          await supabase.from("push_subscriptions").delete().eq("endpoint", endpoint);
+        } else {
+          console.warn("Failed to send push notification:", error);
+        }
+      }
+    }),
+  );
 }
 
 async function addManagerNotification(
@@ -1294,6 +1385,62 @@ export async function performAction(
       const { error } = await query;
       if (error) rowError(error.message);
     }
+    return getSnapshot(claims);
+  }
+
+  if (action === "subscribePush") {
+    if (claims.role !== "teacher" || !claims.teacherId) {
+      rowError("Apenas professores podem ativar notificações em segundo plano.");
+    }
+    const subscription = subscriptionFromPayload(payload);
+
+    if (!isSupabaseConfigured()) {
+      rowError("Configure o Supabase para salvar notificações em segundo plano.");
+    }
+
+    const supabase = getSupabaseAdmin();
+    if (!supabase) rowError("Supabase não configurado.");
+    const { error } = await supabase.from("push_subscriptions").upsert(
+      {
+        teacher_id: claims.teacherId,
+        endpoint: subscription.endpoint,
+        p256dh: subscription.keys.p256dh,
+        auth: subscription.keys.auth,
+        user_agent: String(payload.userAgent ?? ""),
+        updated_at: nowIso(),
+      },
+      { onConflict: "endpoint" },
+    );
+    if (error) rowError(error.message);
+
+    await addTeacherNotification(
+      claims.teacherId,
+      "Notificações ativadas",
+      "Este navegador receberá avisos quando suas aulas forem cadastradas ou atualizadas.",
+      "push_enabled",
+      null,
+    );
+    return getSnapshot(claims);
+  }
+
+  if (action === "unsubscribePush") {
+    if (claims.role !== "teacher" || !claims.teacherId) {
+      rowError("Apenas professores podem desativar notificações em segundo plano.");
+    }
+    const endpoint = String(payload.endpoint ?? "");
+    if (!endpoint) rowError("Inscrição de notificação não encontrada.");
+
+    if (isSupabaseConfigured()) {
+      const supabase = getSupabaseAdmin();
+      if (!supabase) rowError("Supabase não configurado.");
+      const { error } = await supabase
+        .from("push_subscriptions")
+        .delete()
+        .eq("teacher_id", claims.teacherId)
+        .eq("endpoint", endpoint);
+      if (error) rowError(error.message);
+    }
+
     return getSnapshot(claims);
   }
 

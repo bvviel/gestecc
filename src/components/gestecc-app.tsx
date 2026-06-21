@@ -39,6 +39,8 @@ type PageView = "general" | "manager" | "teacher";
 type ManagerTab = "people" | "permanent" | "temporary" | "schedules" | "reservations" | "notices";
 type TeacherTab = "overview" | "schedules" | "reservations" | "profile";
 type ApiResponse<T> = { ok: true; data: T } | { ok: false; message: string };
+type AppActionPayload = Record<string, unknown>;
+type PushState = "idle" | "active" | "denied" | "unsupported" | "unavailable";
 
 const today = () => new Date().toISOString().slice(0, 10);
 const workWeek = [
@@ -162,6 +164,13 @@ function normalizeClassGroup(value: string) {
 
 function getFormString(form: HTMLFormElement, name: string) {
   return String(new FormData(form).get(name) ?? "");
+}
+
+function urlBase64ToUint8Array(value: string) {
+  const padding = "=".repeat((4 - (value.length % 4)) % 4);
+  const base64 = `${value}${padding}`.replaceAll("-", "+").replaceAll("_", "/");
+  const rawData = window.atob(base64);
+  return Uint8Array.from([...rawData].map((char) => char.charCodeAt(0)));
 }
 
 function Button({
@@ -324,6 +333,7 @@ export function GesteccApp() {
   const [scheduleOpen, setScheduleOpen] = useState(false);
   const [reservationOpen, setReservationOpen] = useState(false);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
+  const [pushState, setPushState] = useState<PushState>("idle");
   const [message, setMessage] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -386,7 +396,7 @@ export function GesteccApp() {
   }, [fetchSnapshot, session]);
 
   const postAction = useCallback(
-    async (action: string, payload: Record<string, string | number | null | undefined> = {}) => {
+    async (action: string, payload: AppActionPayload = {}) => {
       if (!session) return false;
       setLoading(true);
       setMessage(null);
@@ -412,6 +422,83 @@ export function GesteccApp() {
     },
     [session],
   );
+
+  useEffect(() => {
+    const id = window.setTimeout(() => {
+      if (!session || session.role !== "teacher") {
+        setPushState("idle");
+        return;
+      }
+
+      if (!("Notification" in window) || !("serviceWorker" in navigator) || !("PushManager" in window)) {
+        setPushState("unsupported");
+        return;
+      }
+
+      if (!process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY) {
+        setPushState("unavailable");
+        return;
+      }
+
+      if (Notification.permission === "denied") {
+        setPushState("denied");
+        return;
+      }
+
+      void navigator.serviceWorker.getRegistration("/sw.js").then(async (registration) => {
+        const subscription = await registration?.pushManager.getSubscription();
+        setPushState(subscription ? "active" : "idle");
+      });
+    }, 0);
+
+    return () => window.clearTimeout(id);
+  }, [session]);
+
+  const enablePushNotifications = useCallback(async () => {
+    if (!session || session.role !== "teacher") return;
+
+    if (!("Notification" in window) || !("serviceWorker" in navigator) || !("PushManager" in window)) {
+      setPushState("unsupported");
+      setMessage("Este navegador não oferece suporte a notificações em segundo plano.");
+      return;
+    }
+
+    const vapidPublicKey = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY;
+    if (!vapidPublicKey) {
+      setPushState("unavailable");
+      setMessage("Configure a chave pública VAPID na Vercel para ativar notificações em segundo plano.");
+      return;
+    }
+
+    const permission = await Notification.requestPermission();
+    if (permission !== "granted") {
+      setPushState(permission === "denied" ? "denied" : "idle");
+      setMessage("Permissão de notificação não concedida pelo navegador.");
+      return;
+    }
+
+    try {
+      const registration = await navigator.serviceWorker.register("/sw.js");
+      const existingSubscription = await registration.pushManager.getSubscription();
+      const subscription = existingSubscription ?? await registration.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array(vapidPublicKey),
+      });
+
+      const ok = await postAction("subscribePush", {
+        subscription: subscription.toJSON(),
+        userAgent: navigator.userAgent,
+      });
+
+      if (ok) {
+        setPushState("active");
+        setMessage("Notificações em segundo plano ativadas neste navegador.");
+      }
+    } catch (error) {
+      setPushState("idle");
+      setMessage(error instanceof Error ? error.message : "Não foi possível ativar as notificações.");
+    }
+  }, [postAction, session]);
 
   const login = async (event: FormEvent<HTMLFormElement>, mode: "manager" | "teacher") => {
     event.preventDefault();
@@ -1154,6 +1241,9 @@ export function GesteccApp() {
               <TeacherOverview
                 schedules={data.schedules}
                 reservations={data.reservations}
+                pushState={pushState}
+                loading={loading}
+                onEnablePush={enablePushNotifications}
               />
             )}
             {teacherTab === "schedules" && <TeacherSchedules schedules={data.schedules} />}
@@ -1380,7 +1470,7 @@ function ManagerPeople({
   loading: boolean;
   substitutionOpen: boolean;
   setSubstitutionOpen: (open: boolean) => void;
-  postAction: (action: string, payload?: Record<string, string | number | null | undefined>) => Promise<boolean>;
+  postAction: (action: string, payload?: AppActionPayload) => Promise<boolean>;
 }) {
   const pendingRequests = data.requests.filter((request) => request.status === "pending");
   return (
@@ -1610,7 +1700,7 @@ function ManagerReservations({
 }: {
   reservations: AppSnapshot["reservations"];
   loading: boolean;
-  postAction: (action: string, payload?: Record<string, string | number | null | undefined>) => Promise<boolean>;
+  postAction: (action: string, payload?: AppActionPayload) => Promise<boolean>;
 }) {
   const pending = reservations.filter((reservation) => reservation.status === "pending");
   return (
@@ -1703,7 +1793,7 @@ function SchedulesManager({
   scheduleOpen: boolean;
   setScheduleOpen: (open: boolean) => void;
   loading: boolean;
-  postAction: (action: string, payload?: Record<string, string | number | null | undefined>) => Promise<boolean>;
+  postAction: (action: string, payload?: AppActionPayload) => Promise<boolean>;
 }) {
   const [selectedDiscipline, setSelectedDiscipline] = useState("");
   const [selectedPeriod, setSelectedPeriod] = useState(periodOptions[0].value);
@@ -2015,7 +2105,7 @@ function NoticesManager({
   noticeOpen: boolean;
   setNoticeOpen: (open: boolean) => void;
   loading: boolean;
-  postAction: (action: string, payload?: Record<string, string | number | null | undefined>) => Promise<boolean>;
+  postAction: (action: string, payload?: AppActionPayload) => Promise<boolean>;
 }) {
   return (
     <section className="rounded-xl border border-zinc-200 bg-white p-4 shadow-sm dark:border-white/10 dark:bg-white/[0.04]">
@@ -2110,14 +2200,29 @@ function NoticesManager({
 function TeacherOverview({
   schedules,
   reservations,
+  pushState,
+  loading,
+  onEnablePush,
 }: {
   schedules: AppSnapshot["schedules"];
   reservations: AppSnapshot["reservations"];
+  pushState: PushState;
+  loading: boolean;
+  onEnablePush: () => Promise<void>;
 }) {
   const todaySchedules = schedules.filter((schedule) => schedule.weekday === new Date().getDay());
   const nextReservations = reservations
     .filter((reservation) => reservation.status !== "rejected")
     .slice(0, 4);
+  const pushStatusText = {
+    active: "Notificações ativadas neste navegador.",
+    denied: "Permissão bloqueada no navegador.",
+    unsupported: "Este navegador não suporta notificações em segundo plano.",
+    unavailable: "Aguardando configuração das chaves VAPID.",
+    idle: "Receba avisos mesmo fora do painel.",
+  }[pushState];
+  const canEnablePush = pushState === "idle";
+
   return (
     <div className="grid gap-5 lg:grid-cols-[1.2fr_0.8fr]">
       <section className="rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm dark:border-white/10 dark:bg-white/[0.04]">
@@ -2173,6 +2278,28 @@ function TeacherOverview({
             ))}
           </div>
         )}
+      </section>
+
+      <section className="rounded-2xl border border-emerald-200 bg-emerald-50/60 p-5 shadow-sm dark:border-emerald-400/20 dark:bg-emerald-950/20 lg:col-span-2">
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex items-start gap-3">
+            <span className="grid h-10 w-10 place-items-center rounded-xl bg-white text-[#36c486] shadow-sm dark:bg-white/10">
+              <Bell size={18} />
+            </span>
+            <div>
+              <h2 className="font-black">Notificações em segundo plano</h2>
+              <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-300">
+                {pushStatusText}
+              </p>
+            </div>
+          </div>
+          <Button
+            disabled={!canEnablePush || loading}
+            onClick={() => void onEnablePush()}
+          >
+            <Bell size={15} /> {pushState === "active" ? "Ativadas" : "Ativar notificações"}
+          </Button>
+        </div>
       </section>
     </div>
   );
@@ -2252,7 +2379,7 @@ function TeacherReservations({
   reservationOpen: boolean;
   setReservationOpen: (open: boolean) => void;
   loading: boolean;
-  postAction: (action: string, payload?: Record<string, string | number | null | undefined>) => Promise<boolean>;
+  postAction: (action: string, payload?: AppActionPayload) => Promise<boolean>;
 }) {
   return (
     <section className="rounded-xl border border-zinc-200 bg-white p-4 shadow-sm dark:border-white/10 dark:bg-white/[0.04]">
@@ -2321,7 +2448,7 @@ function TeacherProfile({
   teacher: AppSnapshot["teachers"][number] | null;
   session: ClientSession;
   fileInputRef: React.RefObject<HTMLInputElement | null>;
-  postAction: (action: string, payload?: Record<string, string | number | null | undefined>) => Promise<boolean>;
+  postAction: (action: string, payload?: AppActionPayload) => Promise<boolean>;
 }) {
   const name = teacher?.fullName ?? session.name;
   const avatar = teacher?.avatarUrl;

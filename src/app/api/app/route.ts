@@ -31,7 +31,7 @@ export async function POST(request: Request) {
 
     const body = (await request.json()) as {
       action?: string;
-      payload?: Record<string, string | number | null | undefined>;
+      payload?: Record<string, unknown>;
     };
 
     const data = await performAction(claims, String(body.action ?? ""), body.payload ?? {});
