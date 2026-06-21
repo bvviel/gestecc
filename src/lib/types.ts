@@ -32,6 +32,7 @@ export const DISCIPLINES = [
   "Programação e Algoritmos",
   "Programação Web I",
   "Projeto Integrador",
+  "Sistemas Embarcados e IoT",
 ] as const;
 
 export const SHIFTS = [
