@@ -425,7 +425,7 @@ export function GesteccApp() {
 
   useEffect(() => {
     const id = window.setTimeout(() => {
-      if (!session || session.role !== "teacher") {
+      if (!session) {
         setPushState("idle");
         return;
       }
@@ -455,7 +455,7 @@ export function GesteccApp() {
   }, [session]);
 
   const enablePushNotifications = useCallback(async () => {
-    if (!session || session.role !== "teacher") return;
+    if (!session) return;
 
     if (!("Notification" in window) || !("serviceWorker" in navigator) || !("PushManager" in window)) {
       setPushState("unsupported");
@@ -488,17 +488,20 @@ export function GesteccApp() {
       const ok = await postAction("subscribePush", {
         subscription: subscription.toJSON(),
         userAgent: navigator.userAgent,
+        silent: pushState === "active",
       });
 
       if (ok) {
         setPushState("active");
-        setMessage("Notificações em segundo plano ativadas neste navegador.");
+        setMessage(pushState === "active"
+          ? "Notificações em segundo plano sincronizadas neste navegador."
+          : "Notificações em segundo plano ativadas neste navegador.");
       }
     } catch (error) {
       setPushState("idle");
       setMessage(error instanceof Error ? error.message : "Não foi possível ativar as notificações.");
     }
-  }, [postAction, session]);
+  }, [postAction, pushState, session]);
 
   const login = async (event: FormEvent<HTMLFormElement>, mode: "manager" | "teacher") => {
     event.preventDefault();
@@ -615,6 +618,14 @@ export function GesteccApp() {
 
   const freeRooms = data.rooms.filter((room) => room.status === "free");
   const unreadNotifications = data.notifications.filter((notification) => !notification.readAt).length;
+  const pushStatusText = {
+    active: "Notificações ativas neste navegador.",
+    denied: "Permissão bloqueada no navegador.",
+    unsupported: "Navegador sem suporte a push.",
+    unavailable: "Chaves VAPID não configuradas.",
+    idle: "Receba alertas mesmo fora do painel.",
+  }[pushState];
+  const canEnablePush = pushState === "idle" || pushState === "active";
 
   if (!session) {
     return (
@@ -1080,6 +1091,27 @@ export function GesteccApp() {
                         </div>
                       );
                     })}
+                  </div>
+                  <div className="border-t border-zinc-100 p-3 dark:border-white/10">
+                    <div className="rounded-xl bg-zinc-50 p-3 dark:bg-white/[0.04]">
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <div className="text-xs font-black text-zinc-700 dark:text-zinc-200">Segundo plano</div>
+                          <div className="mt-1 text-[11px] leading-4 text-zinc-500 dark:text-zinc-400">
+                            {pushStatusText}
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          disabled={!canEnablePush || loading}
+                          onClick={() => void enablePushNotifications()}
+                          className="inline-flex h-8 shrink-0 transform-gpu items-center gap-1 rounded-full bg-[#36c486] px-3 text-[11px] font-black text-white shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:shadow-lg disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:translate-y-0"
+                        >
+                          <Bell size={12} />
+                          {pushState === "active" ? "Sincronizar" : "Ativar"}
+                        </button>
+                      </div>
+                    </div>
                   </div>
                 </div>
               )}
@@ -2221,7 +2253,7 @@ function TeacherOverview({
     unavailable: "Aguardando configuração das chaves VAPID.",
     idle: "Receba avisos mesmo fora do painel.",
   }[pushState];
-  const canEnablePush = pushState === "idle";
+  const canEnablePush = pushState === "idle" || pushState === "active";
 
   return (
     <div className="grid gap-5 lg:grid-cols-[1.2fr_0.8fr]">
@@ -2297,7 +2329,7 @@ function TeacherOverview({
             disabled={!canEnablePush || loading}
             onClick={() => void onEnablePush()}
           >
-            <Bell size={15} /> {pushState === "active" ? "Ativadas" : "Ativar notificações"}
+            <Bell size={15} /> {pushState === "active" ? "Sincronizar notificações" : "Ativar notificações"}
           </Button>
         </div>
       </section>

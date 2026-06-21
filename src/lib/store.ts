@@ -21,10 +21,14 @@ type LoginResult =
   | { ok: false; message: string; status?: "pending" | "rejected" | "invalid" };
 
 type ActionPayload = Record<string, unknown>;
+type PushTarget =
+  | { role: "teacher"; teacherId: string }
+  | { role: "manager" };
 
 const globalForMemory = globalThis as typeof globalThis & {
   __gesteccMemory?: MemoryState;
 };
+const MANAGER_PUSH_KEY = "primary-manager";
 
 function nowIso() {
   return new Date().toISOString();
@@ -555,17 +559,12 @@ export async function createTeacherRequest(payload: ActionPayload) {
     };
     state.requests.unshift(request);
     state.requestSecrets[request.id] = passwordHash;
-    state.notifications.unshift({
-      id: newId("notification"),
-      targetRole: "manager",
-      teacherId: null,
-      title: "Nova solicitação de cadastro",
-      body: `${fullName} solicitou acesso como professor de ${discipline}. E-mail: ${email}. Vínculo: ${contractTypeText(contractType)}.`,
-      kind: "teacher_request",
-      readAt: null,
-      payload: { requestId: request.id },
-      createdAt: nowIso(),
-    });
+    await addManagerNotification(
+      "Nova solicitação de cadastro",
+      `${fullName} solicitou acesso como professor de ${discipline}. E-mail: ${email}. Vínculo: ${contractTypeText(contractType)}.`,
+      "teacher_request",
+      { requestId: request.id },
+    );
     return request;
   }
 
@@ -605,16 +604,12 @@ export async function createTeacherRequest(payload: ActionPayload) {
   if (error) rowError(error.message);
   const request = mapRequest(data as Record<string, unknown>);
 
-  const { error: notificationError } = await supabase.from("notifications").insert({
-    target_role: "manager",
-    teacher_id: null,
-    title: "Nova solicitação de cadastro",
-    body: `${fullName} solicitou acesso como professor de ${discipline}. E-mail: ${email}. Vínculo: ${contractTypeText(contractType)}.`,
-    kind: "teacher_request",
-    payload: { requestId: request.id },
-  });
-
-  if (notificationError) rowError(notificationError.message);
+  await addManagerNotification(
+    "Nova solicitação de cadastro",
+    `${fullName} solicitou acesso como professor de ${discipline}. E-mail: ${email}. Vínculo: ${contractTypeText(contractType)}.`,
+    "teacher_request",
+    { requestId: request.id },
+  );
   return request;
 }
 
@@ -645,17 +640,13 @@ async function approveRequest(claims: SessionClaims, requestId: string) {
 
     state.teachers.push(teacher);
     state.teacherSecrets[teacher.id] = state.requestSecrets[request.id];
-    state.notifications.unshift({
-      id: newId("notification"),
-      targetRole: "teacher",
-      teacherId: teacher.id,
-      title: "Cadastro aprovado",
-      body: "Sua solicitação foi aprovada. Você já pode acessar o GESTEC.",
-      kind: "request_approved",
-      readAt: null,
-      payload: null,
-      createdAt: nowIso(),
-    });
+    await addTeacherNotification(
+      teacher.id,
+      "Cadastro aprovado",
+      "Sua solicitação foi aprovada. Você já pode acessar o GESTEC.",
+      "request_approved",
+      { teacherId: teacher.id },
+    );
     return;
   }
 
@@ -699,14 +690,13 @@ async function approveRequest(claims: SessionClaims, requestId: string) {
     .eq("id", requestId);
   if (updateError) rowError(updateError.message);
 
-  const { error: notificationError } = await supabase.from("notifications").insert({
-    target_role: "teacher",
-    teacher_id: teacher.id,
-    title: "Cadastro aprovado",
-    body: "Sua solicitação foi aprovada. Você já pode acessar o GESTEC.",
-    kind: "request_approved",
-  });
-  if (notificationError) rowError(notificationError.message);
+  await addTeacherNotification(
+    teacher.id,
+    "Cadastro aprovado",
+    "Sua solicitação foi aprovada. Você já pode acessar o GESTEC.",
+    "request_approved",
+    { teacherId: teacher.id },
+  );
 }
 
 async function rejectRequest(claims: SessionClaims, requestId: string, reason: string) {
@@ -929,8 +919,61 @@ async function addTeacherNotification(
   await sendTeacherPushNotification(teacherId, title, body, { kind, payload });
 }
 
+async function addTeacherNotificationForAll(
+  title: string,
+  body: string,
+  kind: string,
+  payload: Record<string, unknown> | null = null,
+) {
+  if (!isSupabaseConfigured()) {
+    await Promise.all(
+      memory().teachers.map((teacher) =>
+        addTeacherNotification(teacher.id, title, body, kind, payload),
+      ),
+    );
+    return;
+  }
+
+  const supabase = getSupabaseAdmin();
+  if (!supabase) rowError("Supabase não configurado.");
+  const { data, error } = await supabase
+    .from("teachers")
+    .select("id")
+    .eq("contract_status", "active");
+  if (error) rowError(error.message);
+
+  await Promise.all(
+    (data ?? []).map((teacher) =>
+      addTeacherNotification(
+        String((teacher as Record<string, unknown>).id),
+        title,
+        body,
+        kind,
+        payload,
+      ),
+    ),
+  );
+}
+
 async function sendTeacherPushNotification(
   teacherId: string,
+  title: string,
+  body: string,
+  data: Record<string, unknown> = {},
+) {
+  await sendPushNotificationToTarget({ role: "teacher", teacherId }, title, body, data);
+}
+
+async function sendManagerPushNotification(
+  title: string,
+  body: string,
+  data: Record<string, unknown> = {},
+) {
+  await sendPushNotificationToTarget({ role: "manager" }, title, body, data);
+}
+
+async function sendPushNotificationToTarget(
+  target: PushTarget,
   title: string,
   body: string,
   data: Record<string, unknown> = {},
@@ -940,10 +983,15 @@ async function sendTeacherPushNotification(
   const supabase = getSupabaseAdmin();
   if (!supabase) return;
 
-  const { data: subscriptions, error } = await supabase
+  let query = supabase
     .from("push_subscriptions")
-    .select("endpoint,p256dh,auth")
-    .eq("teacher_id", teacherId);
+    .select("endpoint,p256dh,auth");
+
+  query = target.role === "teacher"
+    ? query.eq("teacher_id", target.teacherId)
+    : query.eq("target_role", "manager").eq("manager_key", MANAGER_PUSH_KEY);
+
+  const { data: subscriptions, error } = await query;
 
   if (error) {
     console.warn("Push notifications are not ready:", error.message);
@@ -970,7 +1018,7 @@ async function sendTeacherPushNotification(
             icon: "/favicon.ico",
             badge: "/favicon.ico",
             url: "/",
-            data,
+            data: { ...data, targetRole: target.role },
           }),
         );
       } catch (error) {
@@ -1019,6 +1067,7 @@ async function addManagerNotification(
     payload,
   });
   if (error) rowError(error.message);
+  await sendManagerPushNotification(title, body, { kind, payload });
 }
 
 export async function performAction(
@@ -1098,9 +1147,12 @@ export async function performAction(
     const category = String(payload.category ?? "Geral").trim() || "Geral";
     if (!title || !body) rowError("Informe título e descrição do aviso.");
 
+    let noticeId = "";
+
     if (!isSupabaseConfigured()) {
+      noticeId = newId("notice");
       memory().notices.unshift({
-        id: newId("notice"),
+        id: noticeId,
         title,
         body,
         category,
@@ -1110,14 +1162,26 @@ export async function performAction(
     } else {
       const supabase = getSupabaseAdmin();
       if (!supabase) rowError("Supabase não configurado.");
-      const { error } = await supabase.from("notices").insert({
-        title,
-        body,
-        category,
-        expires_at: payload.expiresAt || null,
-      });
+      const { data, error } = await supabase
+        .from("notices")
+        .insert({
+          title,
+          body,
+          category,
+          expires_at: payload.expiresAt || null,
+        })
+        .select("id")
+        .single();
       if (error) rowError(error.message);
+      noticeId = String((data as Record<string, unknown>).id);
     }
+
+    await addTeacherNotificationForAll(
+      "Novo aviso publicado",
+      `${title}: ${body}`,
+      "notice_created",
+      { noticeId },
+    );
     return getSnapshot(claims);
   }
 
@@ -1389,9 +1453,7 @@ export async function performAction(
   }
 
   if (action === "subscribePush") {
-    if (claims.role !== "teacher" || !claims.teacherId) {
-      rowError("Apenas professores podem ativar notificações em segundo plano.");
-    }
+    if (claims.role === "teacher" && !claims.teacherId) rowError("Professor não encontrado.");
     const subscription = subscriptionFromPayload(payload);
 
     if (!isSupabaseConfigured()) {
@@ -1400,44 +1462,82 @@ export async function performAction(
 
     const supabase = getSupabaseAdmin();
     if (!supabase) rowError("Supabase não configurado.");
-    const { error } = await supabase.from("push_subscriptions").upsert(
-      {
-        teacher_id: claims.teacherId,
-        endpoint: subscription.endpoint,
-        p256dh: subscription.keys.p256dh,
-        auth: subscription.keys.auth,
-        user_agent: String(payload.userAgent ?? ""),
-        updated_at: nowIso(),
-      },
-      { onConflict: "endpoint" },
-    );
-    if (error) rowError(error.message);
+    const subscriptionRow = {
+      target_role: claims.role,
+      teacher_id: claims.role === "teacher" ? claims.teacherId : null,
+      manager_key: claims.role === "manager" ? MANAGER_PUSH_KEY : null,
+      endpoint: subscription.endpoint,
+      p256dh: subscription.keys.p256dh,
+      auth: subscription.keys.auth,
+      user_agent: String(payload.userAgent ?? ""),
+      updated_at: nowIso(),
+    };
 
-    await addTeacherNotification(
-      claims.teacherId,
-      "Notificações ativadas",
-      "Este navegador receberá avisos quando suas aulas forem cadastradas ou atualizadas.",
-      "push_enabled",
-      null,
-    );
+    const { error } = await supabase
+      .from("push_subscriptions")
+      .upsert(subscriptionRow, { onConflict: "endpoint" });
+    if (error) {
+      if (
+        claims.role === "teacher" &&
+        (error.message.includes("target_role") || error.message.includes("manager_key"))
+      ) {
+        const { error: fallbackError } = await supabase.from("push_subscriptions").upsert(
+          {
+            teacher_id: claims.teacherId,
+            endpoint: subscription.endpoint,
+            p256dh: subscription.keys.p256dh,
+            auth: subscription.keys.auth,
+            user_agent: String(payload.userAgent ?? ""),
+            updated_at: nowIso(),
+          },
+          { onConflict: "endpoint" },
+        );
+        if (fallbackError) rowError(fallbackError.message);
+      } else {
+        rowError(
+          claims.role === "manager"
+            ? "Atualize a tabela push_subscriptions no Supabase antes de ativar notificações da gestão."
+            : error.message,
+        );
+      }
+    }
+
+    if (!payload.silent) {
+      if (claims.role === "teacher" && claims.teacherId) {
+        await addTeacherNotification(
+          claims.teacherId,
+          "Notificações ativadas",
+          "Este navegador receberá avisos, aulas, reservas e comunicados publicados pela gestão.",
+          "push_enabled",
+          null,
+        );
+      } else {
+        await addManagerNotification(
+          "Notificações ativadas",
+          "Este navegador receberá novas solicitações, reservas pendentes e alertas da gestão.",
+          "push_enabled",
+          null,
+        );
+      }
+    }
     return getSnapshot(claims);
   }
 
   if (action === "unsubscribePush") {
-    if (claims.role !== "teacher" || !claims.teacherId) {
-      rowError("Apenas professores podem desativar notificações em segundo plano.");
-    }
     const endpoint = String(payload.endpoint ?? "");
     if (!endpoint) rowError("Inscrição de notificação não encontrada.");
 
     if (isSupabaseConfigured()) {
       const supabase = getSupabaseAdmin();
       if (!supabase) rowError("Supabase não configurado.");
-      const { error } = await supabase
+      let query = supabase
         .from("push_subscriptions")
         .delete()
-        .eq("teacher_id", claims.teacherId)
         .eq("endpoint", endpoint);
+      query = claims.role === "teacher"
+        ? query.eq("teacher_id", claims.teacherId ?? "")
+        : query.eq("target_role", "manager").eq("manager_key", MANAGER_PUSH_KEY);
+      const { error } = await query;
       if (error) rowError(error.message);
     }
 
