@@ -48,7 +48,7 @@ import {
 
 type AuthView = "select" | "manager" | "teacher" | "request" | "about";
 type PageView = "general" | "manager" | "teacher";
-type ManagerTab = "people" | "permanent" | "temporary" | "schedules" | "reservations" | "notices";
+type ManagerTab = "people" | "permanent" | "temporary" | "schedules" | "rooms" | "reservations" | "notices";
 type TeacherTab = "overview" | "schedules" | "reservations" | "profile";
 type ApiResponse<T> = { ok: true; data: T } | { ok: false; message: string };
 type AppActionPayload = Record<string, unknown>;
@@ -213,6 +213,14 @@ function normalizeClassGroup(value: string) {
     .replaceAll("°", "º")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+function roomLabel(room: Pick<Room, "name" | "kind">) {
+  return room.kind && room.kind !== "Sala" ? `${room.name} · ${room.kind}` : room.name;
+}
+
+function roomCanBeUsed(room: Pick<Room, "status" | "isAvailable">) {
+  return room.isAvailable && room.status === "free";
 }
 
 function getFormString(form: HTMLFormElement, name: string) {
@@ -688,7 +696,7 @@ export function GesteccApp() {
     [data.teachers, session?.teacherId],
   );
 
-  const freeRooms = data.rooms.filter((room) => room.status === "free");
+  const freeRooms = data.rooms.filter(roomCanBeUsed);
   const unreadNotifications = data.notifications.filter((notification) => !notification.readAt).length;
   const pushStatusText = {
     active: "Notificações ativas neste navegador.",
@@ -1265,6 +1273,7 @@ export function GesteccApp() {
                 ["permanent", "Concursados", CheckCircle2],
                 ["temporary", "Não concursados", FileText],
                 ["schedules", "Horários", Calendar],
+                ["rooms", "Salas", DoorOpen],
                 ["reservations", "Reservas", ClipboardList],
                 ["notices", "Avisos", Bell],
               ].map(([key, label, Icon]) => (
@@ -1313,6 +1322,13 @@ export function GesteccApp() {
                 data={data}
                 scheduleOpen={scheduleOpen}
                 setScheduleOpen={setScheduleOpen}
+                loading={loading}
+                postAction={postAction}
+              />
+            )}
+            {managerTab === "rooms" && (
+              <RoomsManager
+                rooms={data.rooms}
                 loading={loading}
                 postAction={postAction}
               />
@@ -1737,7 +1753,9 @@ function ManagerPeople({
             <TextInput label="Turma" name="classGroup" placeholder="Ex: 1º DS" required />
             <SelectInput label="Sala" name="roomId" defaultValue="" required>
               <option value="" disabled>Selecione</option>
-              {data.rooms.map((room) => <option key={room.id} value={room.id}>{room.name}</option>)}
+              {data.rooms.filter((room) => room.isAvailable).map((room) => (
+                <option key={room.id} value={room.id}>{roomLabel(room)}</option>
+              ))}
             </SelectInput>
             <div className="flex items-end gap-2 md:col-span-3">
               <Button type="submit" disabled={loading}>Registrar</Button>
@@ -1909,6 +1927,103 @@ function ManagerReservations({
   );
 }
 
+function roomStatusText(status: Room["status"]) {
+  return status === "occupied" ? "Ocupada" : status === "reserved" ? "Reservada" : "Livre";
+}
+
+function RoomsManager({
+  rooms,
+  loading,
+  postAction,
+}: {
+  rooms: Room[];
+  loading: boolean;
+  postAction: (action: string, payload?: AppActionPayload) => Promise<boolean>;
+}) {
+  const sortedRooms = [...rooms].sort((a, b) => a.name.localeCompare(b.name, "pt-BR", { numeric: true }));
+  const availableCount = rooms.filter((room) => room.isAvailable).length;
+  const unavailableCount = rooms.length - availableCount;
+
+  return (
+    <section className="grid gap-5">
+      <div className="grid gap-4 sm:grid-cols-3">
+        <StatCard icon={<DoorOpen size={17} />} label="Salas cadastradas" value={rooms.length} tone="bg-emerald-50 text-emerald-600 dark:bg-emerald-500/10" />
+        <StatCard icon={<CheckCircle2 size={17} />} label="Disponíveis para uso" value={availableCount} tone="bg-teal-50 text-teal-600 dark:bg-teal-500/10" />
+        <StatCard icon={<X size={17} />} label="Indisponíveis" value={unavailableCount} tone="bg-rose-50 text-rose-600 dark:bg-rose-500/10" />
+      </div>
+
+      <section className="rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm dark:border-white/10 dark:bg-white/[0.04]">
+        <div className="mb-5">
+          <h2 className="font-black">Disponibilidade das salas</h2>
+          <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
+            Salas indisponíveis não aparecem para reservas e não podem ser usadas em novos horários.
+          </p>
+        </div>
+
+        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+          {sortedRooms.map((room) => (
+            <form
+              key={room.id}
+              className={cx(
+                "grid gap-3 rounded-2xl border p-4 transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md",
+                room.isAvailable
+                  ? "border-emerald-100 bg-emerald-50/60 dark:border-emerald-400/20 dark:bg-emerald-400/10"
+                  : "border-rose-100 bg-rose-50/70 dark:border-rose-400/20 dark:bg-rose-400/10",
+              )}
+              onSubmit={async (event) => {
+                event.preventDefault();
+                const form = event.currentTarget;
+                const submitter = (event.nativeEvent as SubmitEvent).submitter as HTMLButtonElement | null;
+                const ok = await postAction("updateRoomAvailability", {
+                  roomId: room.id,
+                  isAvailable: submitter?.value === "true",
+                  availabilityNote: getFormString(form, "availabilityNote"),
+                });
+                if (ok) form.reset();
+              }}
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <h3 className="truncate text-base font-black">{roomLabel(room)}</h3>
+                  <p className="mt-1 text-xs font-semibold text-zinc-500 dark:text-zinc-400">
+                    Status atual: {roomStatusText(room.status)}
+                  </p>
+                </div>
+                <span
+                  className={cx(
+                    "shrink-0 rounded-full px-2.5 py-1 text-[11px] font-black",
+                    room.isAvailable
+                      ? "bg-emerald-100 text-[#0f8a61] dark:bg-emerald-400/15 dark:text-emerald-100"
+                      : "bg-rose-100 text-rose-700 dark:bg-rose-400/15 dark:text-rose-100",
+                  )}
+                >
+                  {room.isAvailable ? "Disponível" : "Indisponível"}
+                </span>
+              </div>
+
+              <TextInput
+                label="Observação"
+                name="availabilityNote"
+                defaultValue={room.availabilityNote ?? ""}
+                placeholder="Ex: manutenção, interditada, sem uso"
+              />
+
+              <div className="flex flex-wrap gap-2">
+                <Button type="submit" name="isAvailable" value="true" disabled={loading || room.isAvailable}>
+                  <CheckCircle2 size={15} /> Liberar
+                </Button>
+                <Button type="submit" name="isAvailable" value="false" variant="danger" disabled={loading || !room.isAvailable}>
+                  <X size={15} /> Indisponibilizar
+                </Button>
+              </div>
+            </form>
+          ))}
+        </div>
+      </section>
+    </section>
+  );
+}
+
 function SchedulesManager({
   data,
   scheduleOpen,
@@ -1972,6 +2087,10 @@ function SchedulesManager({
       classGroupsForShift(scheduleShift)
         .sort((a, b) => a.localeCompare(b, "pt-BR", { numeric: true })),
     [scheduleShift],
+  );
+  const availableRooms = useMemo(
+    () => data.rooms.filter((room) => room.isAvailable),
+    [data.rooms],
   );
 
   const openNewSchedule = () => {
@@ -2127,7 +2246,7 @@ function SchedulesManager({
           </SelectInput>
           <SelectInput label="Sala" name="roomId" defaultValue={editingSchedule?.roomId ?? ""} required>
             <option value="" disabled>Selecione</option>
-            {data.rooms.map((room) => <option key={room.id} value={room.id}>{room.name}</option>)}
+            {availableRooms.map((room) => <option key={room.id} value={room.id}>{roomLabel(room)}</option>)}
           </SelectInput>
           {selectedDiscipline && teachersByDiscipline.length === 0 && (
             <p className="self-end rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-700 dark:border-amber-900/70 dark:bg-amber-950/30 dark:text-amber-200">
@@ -2628,7 +2747,7 @@ function TeacherReservations({
         >
           <SelectInput label="Sala desejada" name="roomId" defaultValue="" required>
             <option value="" disabled>Selecione</option>
-            {freeRooms.map((room) => <option key={room.id} value={room.id}>{room.name}</option>)}
+            {freeRooms.map((room) => <option key={room.id} value={room.id}>{roomLabel(room)}</option>)}
           </SelectInput>
           <TextInput label="Data" name="date" type="date" defaultValue={today()} required />
           <TextInput label="Início" name="startTime" type="time" required />

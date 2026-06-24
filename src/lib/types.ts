@@ -169,6 +169,8 @@ export type Room = {
   floor: string;
   kind: string;
   status: RoomStatus;
+  isAvailable: boolean;
+  availabilityNote: string | null;
   currentTeacherId: string | null;
   currentTeacherName: string | null;
   currentClass: string | null;

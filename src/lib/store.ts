@@ -169,6 +169,19 @@ function canonicalClassGroupForShift(value: string, shift: Shift) {
   return CLASS_GROUPS_BY_SHIFT[shift].find((classGroup) => classGroupKey(classGroup) === key) ?? "";
 }
 
+function roomDisplayName(room: Pick<Room, "name" | "kind">) {
+  return room.kind && room.kind !== "Sala" ? `${room.name} - ${room.kind}` : room.name;
+}
+
+function roomUnavailableMessage(room: Pick<Room, "name" | "kind" | "availabilityNote">) {
+  const note = room.availabilityNote ? ` Motivo: ${room.availabilityNote}` : "";
+  return `${roomDisplayName(room)} está indisponível para reservas e horários.${note}`;
+}
+
+function assertRoomAvailable(room: Room) {
+  if (!room.isAvailable) rowError(roomUnavailableMessage(room));
+}
+
 function shiftFromTime(startTime: string): Shift {
   const normalized = startTime.slice(0, 5);
   if (normalized >= "18:30") return "night";
@@ -252,6 +265,8 @@ function mapRoom(row: Record<string, unknown>): Room {
     floor: String(row.floor),
     kind: String(row.kind),
     status: String(row.status) as Room["status"],
+    isAvailable: row.is_available !== false,
+    availabilityNote: row.availability_note ? String(row.availability_note) : null,
     currentTeacherId: row.current_teacher_id ? String(row.current_teacher_id) : null,
     currentTeacherName: row.current_teacher_name ? String(row.current_teacher_name) : null,
     currentClass: row.current_class ? String(row.current_class) : null,
@@ -955,7 +970,7 @@ function applyScheduleDetails(schedule: Schedule, teacher: Teacher, room: Room, 
   schedule.shift = details.shift;
   schedule.classGroup = details.classGroup;
   schedule.roomId = room.id;
-  schedule.roomName = room.name;
+  schedule.roomName = roomDisplayName(room);
   schedule.weekday = details.weekday;
   schedule.periodLabel = details.periodLabel;
   schedule.startTime = details.startTime;
@@ -979,7 +994,7 @@ async function updateScheduleRecord(scheduleId: string, teacher: Teacher, room: 
       shift: details.shift,
       class_group: details.classGroup,
       room_id: room.id,
-      room_name: room.name,
+      room_name: roomDisplayName(room),
       weekday: details.weekday,
       period_label: details.periodLabel,
       start_time: details.startTime,
@@ -995,7 +1010,7 @@ async function updateScheduleRecord(scheduleId: string, teacher: Teacher, room: 
         discipline: details.discipline,
         class_group: details.classGroup,
         room_id: room.id,
-        room_name: room.name,
+        room_name: roomDisplayName(room),
         weekday: details.weekday,
         period_label: details.periodLabel,
         start_time: details.startTime,
@@ -1340,11 +1355,45 @@ export async function performAction(
     return getSnapshot(claims);
   }
 
+  if (action === "updateRoomAvailability") {
+    requireManager(claims);
+    const room = await lookupRoom(String(payload.roomId ?? ""));
+    const isAvailable = payload.isAvailable === true || payload.isAvailable === "true";
+    const availabilityNote = String(payload.availabilityNote ?? "").trim() || null;
+
+    if (!isSupabaseConfigured()) {
+      const target = findMemoryRoom(memory(), room.id);
+      target.isAvailable = isAvailable;
+      target.availabilityNote = availabilityNote;
+      target.updatedAt = nowIso();
+    } else {
+      const supabase = getSupabaseAdmin();
+      if (!supabase) rowError("Supabase não configurado.");
+      const { error } = await supabase
+        .from("rooms")
+        .update({
+          is_available: isAvailable,
+          availability_note: availabilityNote,
+          updated_at: nowIso(),
+        })
+        .eq("id", room.id);
+      if (error) {
+        if (isMissingColumnError(error)) {
+          rowError("Atualize a tabela rooms no Supabase antes de gerenciar disponibilidade das salas.");
+        }
+        rowError(error.message);
+      }
+    }
+
+    return getSnapshot(claims);
+  }
+
   if (action === "addSubstitution") {
     requireManager(claims);
     const originalTeacher = await lookupTeacher(String(payload.originalTeacherId ?? ""));
     const substituteTeacher = await lookupTeacher(String(payload.substituteTeacherId ?? ""));
     const room = await lookupRoom(String(payload.roomId ?? ""));
+    assertRoomAvailable(room);
     const date = String(payload.date ?? today());
     const discipline = String(payload.discipline ?? substituteTeacher.discipline);
     const classGroup = String(payload.classGroup ?? "").trim();
@@ -1361,7 +1410,7 @@ export async function performAction(
         discipline,
         classGroup,
         roomId: room.id,
-        roomName: room.name,
+        roomName: roomDisplayName(room),
         createdAt: nowIso(),
       });
     } else {
@@ -1376,7 +1425,7 @@ export async function performAction(
         discipline,
         class_group: classGroup,
         room_id: room.id,
-        room_name: room.name,
+        room_name: roomDisplayName(room),
       });
       if (error) rowError(error.message);
     }
@@ -1387,6 +1436,7 @@ export async function performAction(
     requireManager(claims);
     const teacher = await lookupTeacher(String(payload.teacherId ?? ""));
     const room = await lookupRoom(String(payload.roomId ?? ""));
+    assertRoomAvailable(room);
     const details = validateSchedulePayload(payload, teacher.discipline);
     if (!teacherCanTeach(teacher, details.discipline)) {
       rowError(`Selecione um professor aprovado para ${details.discipline}.`);
@@ -1409,7 +1459,7 @@ export async function performAction(
         shift: details.shift,
         classGroup: details.classGroup,
         roomId: room.id,
-        roomName: room.name,
+        roomName: roomDisplayName(room),
         weekday: details.weekday,
         periodLabel: details.periodLabel,
         startTime: details.startTime,
@@ -1429,7 +1479,7 @@ export async function performAction(
           shift: details.shift,
           class_group: details.classGroup,
           room_id: room.id,
-          room_name: room.name,
+          room_name: roomDisplayName(room),
           weekday: details.weekday,
           period_label: details.periodLabel,
           start_time: details.startTime,
@@ -1446,7 +1496,7 @@ export async function performAction(
             discipline: details.discipline,
             class_group: details.classGroup,
             room_id: room.id,
-            room_name: room.name,
+            room_name: roomDisplayName(room),
             weekday: details.weekday,
             period_label: details.periodLabel,
             start_time: details.startTime,
@@ -1461,7 +1511,7 @@ export async function performAction(
     await addTeacherNotification(
       teacher.id,
       replacedSchedule ? "Aula substituída na grade" : "Nova aula cadastrada",
-      `${details.discipline} em ${details.classGroup}, ${weekdaysLabel(details.weekday)}, ${details.periodLabel}, sala ${room.name}.`,
+      `${details.discipline} em ${details.classGroup}, ${weekdaysLabel(details.weekday)}, ${details.periodLabel}, sala ${roomDisplayName(room)}.`,
       replacedSchedule ? "schedule_replaced" : "schedule_created",
       { scheduleId, replacedScheduleId: replacedSchedule?.id ?? null },
     );
@@ -1483,6 +1533,7 @@ export async function performAction(
     const current = await lookupSchedule(scheduleId);
     const teacher = await lookupTeacher(String(payload.teacherId ?? current.teacherId));
     const room = await lookupRoom(String(payload.roomId ?? current.roomId ?? ""));
+    assertRoomAvailable(room);
     const details = validateSchedulePayload(
       payload,
       teacher.discipline,
@@ -1501,7 +1552,7 @@ export async function performAction(
       target.shift = shift;
       target.classGroup = classGroup;
       target.roomId = room.id;
-      target.roomName = room.name;
+      target.roomName = roomDisplayName(room);
       target.weekday = weekday;
       target.periodLabel = periodLabel;
       target.startTime = startTime;
@@ -1518,7 +1569,7 @@ export async function performAction(
           shift,
           class_group: classGroup,
           room_id: room.id,
-          room_name: room.name,
+          room_name: roomDisplayName(room),
           weekday,
           period_label: periodLabel,
           start_time: startTime,
@@ -1534,7 +1585,7 @@ export async function performAction(
             discipline,
             class_group: classGroup,
             room_id: room.id,
-            room_name: room.name,
+            room_name: roomDisplayName(room),
             weekday,
             period_label: periodLabel,
             start_time: startTime,
@@ -1551,7 +1602,7 @@ export async function performAction(
     await addTeacherNotification(
       teacher.id,
       "Aula atualizada",
-      `${discipline} em ${classGroup}, ${weekdaysLabel(weekday)}, ${periodLabel}, sala ${room.name}.`,
+      `${discipline} em ${classGroup}, ${weekdaysLabel(weekday)}, ${periodLabel}, sala ${roomDisplayName(room)}.`,
       "schedule_updated",
       { scheduleId },
     );
@@ -1728,6 +1779,7 @@ export async function performAction(
   if (action === "occupyRoom") {
     if (claims.role !== "teacher" || !claims.teacherId) rowError("Apenas professores podem ocupar sala.");
     const room = await lookupRoom(String(payload.roomId ?? ""));
+    assertRoomAvailable(room);
     const classGroup = String(payload.classGroup ?? "").trim();
     const period = String(payload.period ?? "").trim();
 
@@ -1795,6 +1847,7 @@ export async function performAction(
   if (action === "addReservation") {
     if (claims.role !== "teacher" || !claims.teacherId) rowError("Apenas professores podem reservar sala.");
     const room = await lookupRoom(String(payload.roomId ?? ""));
+    assertRoomAvailable(room);
     const date = String(payload.date ?? today());
     const startTime = String(payload.startTime ?? "");
     const endTime = String(payload.endTime ?? "");
@@ -1809,7 +1862,7 @@ export async function performAction(
         teacherId: claims.teacherId,
         teacherName: claims.name,
         roomId: room.id,
-        roomName: room.name,
+        roomName: roomDisplayName(room),
         date,
         startTime,
         endTime,
@@ -1819,7 +1872,7 @@ export async function performAction(
       });
       await addManagerNotification(
         "Nova reserva pendente",
-        `${claims.name} solicitou ${room.name} em ${dateLabelForNotification(date)}, das ${startTime} às ${endTime}.`,
+        `${claims.name} solicitou ${roomDisplayName(room)} em ${dateLabelForNotification(date)}, das ${startTime} às ${endTime}.`,
         "reservation_pending",
         { reservationId },
       );
@@ -1832,7 +1885,7 @@ export async function performAction(
           teacher_id: claims.teacherId,
           teacher_name: claims.name,
           room_id: room.id,
-          room_name: room.name,
+          room_name: roomDisplayName(room),
           date,
           start_time: startTime,
           end_time: endTime,
@@ -1845,7 +1898,7 @@ export async function performAction(
       const reservationId = String((data as Record<string, unknown>).id);
       await addManagerNotification(
         "Nova reserva pendente",
-        `${claims.name} solicitou ${room.name} em ${dateLabelForNotification(date)}, das ${startTime} às ${endTime}.`,
+        `${claims.name} solicitou ${roomDisplayName(room)} em ${dateLabelForNotification(date)}, das ${startTime} às ${endTime}.`,
         "reservation_pending",
         { reservationId },
       );
@@ -1857,6 +1910,8 @@ export async function performAction(
     requireManager(claims);
     const reservationId = String(payload.reservationId ?? "");
     const reservation = await lookupReservation(reservationId);
+    const reservationRoom = reservation.roomId ? await lookupRoom(reservation.roomId) : null;
+    if (reservationRoom) assertRoomAvailable(reservationRoom);
 
     if (!isSupabaseConfigured()) {
       const state = memory();
@@ -1864,6 +1919,7 @@ export async function performAction(
       target.status = "approved";
       if (target.roomId) {
         const room = findMemoryRoom(state, target.roomId);
+        assertRoomAvailable(room);
         room.status = "reserved";
         room.currentTeacherId = target.teacherId;
         room.currentTeacherName = target.teacherName;
