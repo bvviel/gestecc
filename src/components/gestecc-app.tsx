@@ -186,7 +186,7 @@ function ShiftButtons({
 }) {
   if (available.length <= 1) return null;
   return (
-    <div className="flex flex-wrap gap-2">
+    <div className="inline-flex w-fit flex-wrap gap-1 rounded-2xl bg-zinc-100 p-1 shadow-inner dark:bg-[#07120d]">
       {available.map((shift) => (
         <button
           key={shift}
@@ -196,7 +196,7 @@ function ShiftButtons({
             "h-9 rounded-xl px-4 text-sm font-black transition-all duration-300 hover:-translate-y-0.5 active:scale-[0.98]",
             selected === shift
               ? "bg-[#36c486] text-white shadow-sm"
-              : "bg-zinc-100 text-zinc-500 hover:text-zinc-950 dark:bg-white/5 dark:text-zinc-400 dark:hover:text-white",
+              : "text-zinc-500 hover:bg-white hover:text-zinc-950 dark:text-zinc-400 dark:hover:bg-white/5 dark:hover:text-white",
           )}
         >
           {shiftLabel(shift)}
@@ -2540,16 +2540,18 @@ function TeacherOverview({
   return (
     <div className="grid gap-5 lg:grid-cols-[1.2fr_0.8fr]">
       <section className="rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm dark:border-white/10 dark:bg-white/[0.04]">
-        <div className="mb-4 flex items-center gap-2">
-          <span className="grid h-9 w-9 place-items-center rounded-xl bg-emerald-50 text-[#36c486] dark:bg-emerald-400/10">
-            <Calendar size={17} />
-          </span>
-          <div>
-            <h2 className="font-black">Aulas de hoje</h2>
-            <p className="text-sm text-zinc-500 dark:text-zinc-400">Salas e turmas programadas para seu dia.</p>
+        <div className="mb-4 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex items-center gap-2">
+            <span className="grid h-9 w-9 place-items-center rounded-xl bg-emerald-50 text-[#36c486] dark:bg-emerald-400/10">
+              <Calendar size={17} />
+            </span>
+            <div>
+              <h2 className="font-black">Aulas de hoje</h2>
+              <p className="text-sm text-zinc-500 dark:text-zinc-400">Salas e turmas programadas para seu dia.</p>
+            </div>
           </div>
+          <ShiftButtons available={availableShifts} selected={selectedShift} onSelect={setSelectedShift} />
         </div>
-        <ShiftButtons available={availableShifts} selected={selectedShift} onSelect={setSelectedShift} />
         <ResponsiveTable
           headers={["Período", "Disciplina", "Turma", "Sala"]}
           rows={todaySchedules.map((schedule) => [
